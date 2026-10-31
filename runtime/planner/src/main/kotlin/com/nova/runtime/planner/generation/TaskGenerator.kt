@@ -122,6 +122,11 @@ class DefaultTaskGenerator : TaskGenerator {
                 nir.constraints["timeRangeEnd"]?.let { put("timeRangeEnd", it) }
                 nir.constraints["documentSubject"]?.let { put("documentSubject", it) }
             }
+            capability in setOf("search", "search.semantic", "search.photos") -> {
+                put("capabilityType", if (capability == "search") "search.semantic" else capability)
+                put("operation", "search")
+                put("query", nir.constraints["query"] ?: nir.context["rawPayload"] ?: nir.goal)
+            }
             capability == "whatsapp" || capability.startsWith("whatsapp") -> {
                 put("capabilityType", "whatsapp")
                 put("operation", "send_message")

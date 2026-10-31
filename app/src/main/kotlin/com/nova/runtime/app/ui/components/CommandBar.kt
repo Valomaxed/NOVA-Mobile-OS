@@ -59,12 +59,6 @@ fun CommandBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .shadow(
-                    elevation = 24.dp,
-                    shape = MaterialTheme.shapes.extraLarge,
-                    ambientColor = NovaColors.accent.copy(alpha = 0.08f),
-                    spotColor = NovaColors.accent.copy(alpha = 0.12f),
-                )
                 .clip(MaterialTheme.shapes.extraLarge)
                 .background(NovaColors.glassSurface)
                 .border(1.dp, NovaColors.glassBorder, MaterialTheme.shapes.extraLarge)
@@ -78,7 +72,7 @@ fun CommandBar(
                     onClick = onMicToggle,
                     enabled = enabled,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(
                             if (isRecording) {
@@ -131,7 +125,7 @@ fun CommandBar(
                     onClick = ::submit,
                     enabled = queryText.isNotBlank() && enabled && !isRecording,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(
                             if (queryText.isNotBlank() && enabled && !isRecording) {

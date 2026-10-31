@@ -30,6 +30,9 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE uri = :uri LIMIT 1")
     suspend fun getByUri(uri: String): PhotoEntity?
 
+    @Query("SELECT uri FROM photos WHERE uri IN (:uris)")
+    suspend fun getExistingUris(uris: List<String>): List<String>
+
     @Query("SELECT * FROM photos WHERE ocrText LIKE '%' || :query || '%' ORDER BY takenAt DESC")
     suspend fun searchByOcr(query: String): List<PhotoEntity>
 
@@ -41,7 +44,11 @@ interface PhotoDao {
         LIMIT :limit OFFSET :offset
         """,
     )
-    suspend fun searchByOcrPaged(query: String, limit: Int, offset: Int): List<PhotoEntity>
+    suspend fun searchByOcrPaged(
+        query: String,
+        limit: Int,
+        offset: Int,
+    ): List<PhotoEntity>
 
     @Query("SELECT COUNT(*) FROM photos WHERE ocrText LIKE '%' || :query || '%'")
     suspend fun countByOcr(query: String): Int

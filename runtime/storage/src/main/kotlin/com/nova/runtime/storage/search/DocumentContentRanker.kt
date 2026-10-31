@@ -16,8 +16,17 @@ object DocumentContentRanker {
 
     fun tokenize(query: String): List<String> =
         query.lowercase()
-            .split(Regex("[^a-z0-9]+"))
+            .split(Regex("""[^\p{L}\p{N}]+"""))
             .filter { it.length > 2 && it !in QUERY_STOPWORDS }
+
+    fun explicitFileNames(query: String): List<String> {
+        val extensions = "pdf|txt|md|csv|json|docx|xlsx|html|htm"
+        val quoted = Regex("""["“]([^"”\n]+\.(?:$extensions))["”]""", RegexOption.IGNORE_CASE)
+            .findAll(query).map { it.groupValues[1] }.toList()
+        if (quoted.isNotEmpty()) return quoted.distinct()
+        return Regex("""\b[\p{L}\p{N}_][\p{L}\p{N}_.-]*\.(?:$extensions)\b""", RegexOption.IGNORE_CASE)
+            .findAll(query).map { it.value }.distinct().toList()
+    }
 
     fun scoreDocument(
         document: DocumentEntity,

@@ -107,6 +107,9 @@ interface ExecutionHistoryRepository {
 }
 
 interface EmbeddingRepository {
+    suspend fun getByObjectId(objectId: UUID): List<EmbeddingEntity> =
+        listWithPersistedVectors().filter { it.objectId == objectId }
+
     suspend fun insert(embedding: EmbeddingEntity)
 
     suspend fun update(embedding: EmbeddingEntity)
@@ -118,6 +121,11 @@ interface EmbeddingRepository {
     fun observeById(embeddingId: UUID): Flow<EmbeddingEntity?>
 
     suspend fun listWithPersistedVectors(): List<EmbeddingEntity>
+
+    suspend fun listPersistedVectorsPage(
+        afterId: UUID?,
+        limit: Int,
+    ): List<EmbeddingEntity>
 }
 
 interface MessageRepository {
@@ -129,11 +137,18 @@ interface MessageRepository {
 
     suspend fun getByExternalId(externalId: String): MessageEntity?
 
-    suspend fun listByChannel(channel: String, limit: Int = 50): List<MessageEntity>
+    suspend fun listByChannel(
+        channel: String,
+        limit: Int = 50,
+    ): List<MessageEntity>
 
     suspend fun listUnindexed(limit: Int = 32): List<MessageEntity>
 
-    suspend fun search(channel: String, query: String, limit: Int = 25): List<MessageEntity>
+    suspend fun search(
+        channel: String,
+        query: String,
+        limit: Int = 25,
+    ): List<MessageEntity>
 
     suspend fun countByChannel(channel: String): Int
 

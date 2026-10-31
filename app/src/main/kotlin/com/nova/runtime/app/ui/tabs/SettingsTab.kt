@@ -1,5 +1,6 @@
 package com.nova.runtime.app.ui.tabs
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Storage
@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nova.runtime.app.ui.NovaOsViewModel
@@ -44,14 +45,14 @@ import com.nova.runtime.app.ui.components.NovaStatusChip
 import com.nova.runtime.app.ui.components.NovaToggle
 import com.nova.runtime.app.ui.models.LiveTelemetryState
 import com.nova.runtime.app.ui.models.RuntimeModelSpec
-import com.nova.runtime.app.ui.theme.NovaAkzidenzRed
+import com.nova.runtime.app.ui.theme.NovaAccentBlue
 import com.nova.runtime.app.ui.theme.NovaPureBlack
 import com.nova.runtime.app.ui.theme.NovaSecondaryGrey
 import com.nova.runtime.app.ui.theme.NovaSurfaceDim
 import com.nova.runtime.app.ui.theme.NovaSurfaceLowest
 
 /**
- * Objective Modernist CONFIG (Settings & System Parameters) Tab.
+ * Model settings and measured runtime status.
  * Driven 100% by real PreferenceDao, ModelDownloadManager, and telemetry state.
  */
 @Composable
@@ -67,30 +68,33 @@ fun SettingsTab(
     val runtimeModels by viewModel.runtimeModelsList.collectAsState()
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+        modifier =
+            modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         // Header
         Column {
             Text(
-                text = "SYSTEM CONFIG",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.02).sp,
-                ),
+                text = "Settings",
+                style =
+                    MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.02).sp,
+                    ),
                 color = NovaPureBlack,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(width = 2.dp, color = NovaAkzidenzRed, shape = RoundedCornerShape(0.dp))
-                    .padding(8.dp),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .background(NovaSurfaceLowest, RoundedCornerShape(16.dp))
+                        .padding(8.dp),
             ) {
                 Text(
-                    text = "Hardware parameters and active runtime models.",
+                    text = "Model capacity and device information.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = NovaSecondaryGrey,
                 )
@@ -104,8 +108,8 @@ fun SettingsTab(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
-                    text = "HYPERPARAMETERS",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    text = "Model preferences",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = NovaPureBlack,
                 )
 
@@ -117,14 +121,14 @@ fun SettingsTab(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "TEMPERATURE",
+                            text = "Temperature",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                             color = NovaPureBlack,
                         )
                         Text(
                             text = "%.2f".format(tempSetting),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                            color = NovaAkzidenzRed,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = NovaAccentBlue,
                         )
                     }
 
@@ -134,11 +138,12 @@ fun SettingsTab(
                         value = tempSetting,
                         onValueChange = { viewModel.updateTemperature(it) },
                         valueRange = 0.0f..1.0f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = NovaAkzidenzRed,
-                            activeTrackColor = NovaAkzidenzRed,
-                            inactiveTrackColor = NovaSurfaceDim,
-                        ),
+                        colors =
+                            SliderDefaults.colors(
+                                thumbColor = NovaAccentBlue,
+                                activeTrackColor = NovaAccentBlue,
+                                inactiveTrackColor = NovaSurfaceDim,
+                            ),
                     )
                 }
 
@@ -150,38 +155,24 @@ fun SettingsTab(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "CONTEXT WINDOW",
+                            text = "Model context",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                             color = NovaPureBlack,
                         )
                         Text(
-                            text = "%,d TOKEN".format(ctxSetting),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            text = if (ctxSetting > 0) "%,d tokens".format(ctxSetting) else "Not installed",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = NovaPureBlack,
                         )
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf(4096, 16384, 32768, 131072).forEach { option ->
-                            val selected = ctxSetting == option
-                            NovaButton(
-                                text = when (option) {
-                                    4096 -> "4K"
-                                    16384 -> "16K"
-                                    32768 -> "32K"
-                                    else -> "128K"
-                                },
-                                onClick = { viewModel.updateContextWindow(option) },
-                                variant = if (selected) NovaButtonVariant.PRIMARY_RED else NovaButtonVariant.SECONDARY,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
+                    Text(
+                        text = "The current model sets this limit, including your question, source text, and answer. The new Gemma download supports 4,096 tokens; the earlier bundle supports 2,048.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NovaSecondaryGrey,
+                    )
                 }
 
                 // Quantization Toggle Row
@@ -192,12 +183,12 @@ fun SettingsTab(
                 ) {
                     Column {
                         Text(
-                            text = "4-BIT GGUF QUANTIZATION",
+                            text = "Prefer quantized models",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                             color = NovaPureBlack,
                         )
                         Text(
-                            text = "ON-DEVICE NPU ACCELERATED",
+                            text = "Requires a compatible model bundle",
                             style = MaterialTheme.typography.labelSmall,
                             color = NovaSecondaryGrey,
                         )
@@ -223,14 +214,14 @@ fun SettingsTab(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "INSTALLED MODELS",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        text = "Runtime models",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = NovaPureBlack,
                     )
                     Text(
-                        text = "${runtimeModels.size} CORES",
+                        text = "${runtimeModels.size} files",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = NovaAkzidenzRed,
+                        color = NovaAccentBlue,
                     )
                 }
 
@@ -239,82 +230,6 @@ fun SettingsTab(
                         model = model,
                         onExpandContent = onExpandContent,
                     )
-                }
-            }
-        }
-
-        // Hardware Acceleration Telemetry Card
-        NovaCard(
-            modifier = Modifier.fillMaxWidth(),
-            backgroundColor = NovaSurfaceLowest,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "HARDWARE ACCELERATION",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                    color = NovaPureBlack,
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column {
-                        Text(
-                            text = "ACCELERATOR TYPE",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = NovaSecondaryGrey,
-                        )
-                        Text(
-                            text = "QUALCOMM HEXAGON NPU",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = NovaPureBlack,
-                        )
-                    }
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = "CURRENT POWER",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = NovaSecondaryGrey,
-                        )
-                        Text(
-                            text = "${"%.2f".format(telemetryState.npuTeraOpsCurrent)} TOPS",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = NovaAkzidenzRed,
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column {
-                        Text(
-                            text = "NPU TEMPERATURE",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = NovaSecondaryGrey,
-                        )
-                        Text(
-                            text = "${telemetryState.npuTempCelsius} °C",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = NovaPureBlack,
-                        )
-                    }
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = "SYSTEM SAFETY SCORE",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = NovaSecondaryGrey,
-                        )
-                        Text(
-                            text = "98 / 100",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = NovaAkzidenzRed,
-                        )
-                    }
                 }
             }
         }
@@ -329,37 +244,41 @@ private fun RuntimeModelRow(
     onExpandContent: (ContentDetailState) -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(width = 1.dp, color = NovaPureBlack, shape = RoundedCornerShape(0.dp))
-            .clickable {
-                onExpandContent(
-                    ContentDetailState(
-                        fileName = "${model.name}: ${model.version}",
-                        text = "Installed Model Specification:\n• Name: ${model.name}\n• Version: ${model.version}\n• Status: ${model.status}\n• Location: /data/user/0/com.nova/app_models/\n• Execution backend: ONNX / GGUF Local Runtime",
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant, shape = RoundedCornerShape(16.dp))
+                .clickable {
+                    onExpandContent(
+                        ContentDetailState(
+                            fileName = "${model.name}: ${model.version}",
+                            text = "Model details:\nName: ${model.name}\nSize: ${model.version}\nStatus: ${model.status}",
+                        ),
                     )
-                )
-            }
-            .padding(12.dp),
+                }
+                .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = when (model.iconName) {
-                    "psychology" -> Icons.Filled.Psychology
-                    "visibility" -> Icons.Filled.Visibility
-                    "mic" -> Icons.Filled.Mic
-                    else -> Icons.Filled.Storage
-                },
+                imageVector =
+                    when (model.iconName) {
+                        "psychology" -> Icons.Filled.Psychology
+                        "visibility" -> Icons.Filled.Visibility
+                        "mic" -> Icons.Filled.Mic
+                        else -> Icons.Filled.Storage
+                    },
                 contentDescription = "Model",
-                tint = NovaAkzidenzRed,
+                tint = NovaAccentBlue,
                 modifier = Modifier.size(20.dp),
             )
             Spacer(modifier = Modifier.width(10.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = model.name,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                     color = NovaPureBlack,
                 )
@@ -373,7 +292,7 @@ private fun RuntimeModelRow(
 
         NovaStatusChip(
             status = model.status,
-            isPrimary = model.status == "LOADED",
+            isPrimary = model.status == "AVAILABLE",
         )
     }
 }

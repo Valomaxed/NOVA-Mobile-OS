@@ -152,7 +152,7 @@ class BertWordPieceTokenizer private constructor(
     companion object {
         private const val UNK_TOKEN = "[UNK]"
 
-        const val DEFAULT_MAX_LENGTH = 128
+        const val DEFAULT_MAX_LENGTH = 256
         const val DEFAULT_CLS_TOKEN_ID = 101L
         const val DEFAULT_SEP_TOKEN_ID = 102L
         const val DEFAULT_UNK_TOKEN_ID = 100L

@@ -1,5 +1,7 @@
 package com.nova.runtime.ai.native.search
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.nova.runtime.ai.model.EmbeddingGenerator
 import com.nova.runtime.ai.model.EmbeddingResult
 import com.nova.runtime.ai.model.HashEmbeddingGenerator
@@ -9,8 +11,6 @@ import com.nova.runtime.ai.model.OcrEngine
 import com.nova.runtime.ai.model.OcrResult
 import com.nova.runtime.ai.native.indexing.EmbeddingIndexer
 import com.nova.runtime.ai.native.indexing.EmbeddingMetadata
-import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import com.nova.runtime.ai.native.ingestion.IndexingCheckpointStore
 import com.nova.runtime.ai.native.ingestion.MediaStoreIngestionService
 import com.nova.runtime.ai.native.ingestion.PhotoImageLoader
@@ -24,18 +24,18 @@ import com.nova.runtime.storage.repository.EmbeddingRepository
 import com.nova.runtime.storage.repository.PhotoRepository
 import com.nova.runtime.storage.search.SearchRequest
 import com.nova.runtime.utils.logging.NoOpRuntimeLogger
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -60,97 +60,40 @@ class SemanticSearchServiceTest {
         photoRepository = FakePhotoRepository()
         documentRepository = FakeDocumentRepository()
         embeddingRepository = FakeEmbeddingRepository()
-        val indexer = EmbeddingIndexer(
-            embeddingGenerator = embeddingGenerator,
-            imageEmbeddingGenerator = imageEmbeddingGenerator,
-            embeddingRepository = embeddingRepository,
-            vectorIndex = vectorIndex,
-            ocrEngine = StubOcrEngine(),
-        )
-        pipeline = SearchIndexPipeline(
-            embeddingIndexer = indexer,
-            photoDao = FakePhotoDao(photoRepository),
-            documentDao = FakeDocumentDao(documentRepository),
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            photoImageLoader = PhotoImageLoader { null },
-        )
-        ingestionService = MediaStoreIngestionService(
-            mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
-            downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
-            documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
-            photoDao = FakePhotoDao(photoRepository),
-            documentDao = FakeDocumentDao(documentRepository),
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            embeddingIndexer = indexer,
-            searchIndexPipeline = pipeline,
-            photoImageLoader = PhotoImageLoader { null },
-            logger = NoOpRuntimeLogger(),
-        )
-        service = SemanticSearchService(
-            embeddingGenerator = embeddingGenerator,
-            imageEmbeddingGenerator = imageEmbeddingGenerator,
-            vectorIndex = vectorIndex,
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            documentDao = FakeDocumentDao(documentRepository),
-            searchIndexPipeline = pipeline,
-            mediaStoreIngestionService = ingestionService,
-            fullDeviceIndexer = null,
-            logger = NoOpRuntimeLogger(),
-        )
-    }
-
-    @Test
-    fun shouldRunIndexCatchUp_falseWithoutCheckpointWhenIndexWarm() = runTest {
-        indexText(UUID.randomUUID(), "document", "warm index")
-
-        assertFalse(
-            service.shouldRunIndexCatchUp(
-                SearchRequest(query = "invoice", limit = 5, indexOnQuery = false),
-            ),
-        )
-    }
-
-    @Test
-    fun shouldRunIndexCatchUp_falseWhenIndexWarmAndRecentlySynced() = runTest {
-        indexText(UUID.randomUUID(), "document", "warm index")
-        val checkpointStore = IndexingCheckpointStore(context)
-        checkpointStore.markPrioritySyncAt()
-        val serviceWithCheckpoint = SemanticSearchService(
-            embeddingGenerator = embeddingGenerator,
-            imageEmbeddingGenerator = imageEmbeddingGenerator,
-            vectorIndex = vectorIndex,
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            documentDao = FakeDocumentDao(documentRepository),
-            searchIndexPipeline = pipeline,
-            mediaStoreIngestionService = ingestionService,
-            fullDeviceIndexer = null,
-            indexingCheckpointStore = checkpointStore,
-            logger = NoOpRuntimeLogger(),
-        )
-
-        assertFalse(
-            serviceWithCheckpoint.shouldRunIndexCatchUp(
-                SearchRequest(query = "invoice", limit = 5, indexOnQuery = false),
-            ),
-        )
-    }
-
-    @Test
-    fun search_reusesCachedTextEmbeddingForDocAndPhotoPaths() =
-        runTest {
-            var embedCalls = 0
-            val countingGenerator = object : EmbeddingGenerator by HashEmbeddingGenerator(dimension = 32) {
-                override suspend fun embed(text: String): EmbeddingResult {
-                    embedCalls++
-                    return HashEmbeddingGenerator(dimension = 32).embed(text)
-                }
-            }
-            val countingService = SemanticSearchService(
-                embeddingGenerator = countingGenerator,
+        val indexer =
+            EmbeddingIndexer(
+                embeddingGenerator = embeddingGenerator,
+                imageEmbeddingGenerator = imageEmbeddingGenerator,
+                embeddingRepository = embeddingRepository,
+                vectorIndex = vectorIndex,
+                ocrEngine = StubOcrEngine(),
+            )
+        pipeline =
+            SearchIndexPipeline(
+                embeddingIndexer = indexer,
+                photoDao = FakePhotoDao(photoRepository),
+                documentDao = FakeDocumentDao(documentRepository),
+                photoRepository = photoRepository,
+                documentRepository = documentRepository,
+                photoImageLoader = PhotoImageLoader { null },
+            )
+        ingestionService =
+            MediaStoreIngestionService(
+                mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
+                downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
+                documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                photoDao = FakePhotoDao(photoRepository),
+                documentDao = FakeDocumentDao(documentRepository),
+                photoRepository = photoRepository,
+                documentRepository = documentRepository,
+                embeddingIndexer = indexer,
+                searchIndexPipeline = pipeline,
+                photoImageLoader = PhotoImageLoader { null },
+                logger = NoOpRuntimeLogger(),
+            )
+        service =
+            SemanticSearchService(
+                embeddingGenerator = embeddingGenerator,
                 imageEmbeddingGenerator = imageEmbeddingGenerator,
                 vectorIndex = vectorIndex,
                 photoRepository = photoRepository,
@@ -161,6 +104,72 @@ class SemanticSearchServiceTest {
                 fullDeviceIndexer = null,
                 logger = NoOpRuntimeLogger(),
             )
+    }
+
+    @Test
+    fun shouldRunIndexCatchUp_falseWithoutCheckpointWhenIndexWarm() =
+        runTest {
+            indexText(UUID.randomUUID(), "document", "warm index")
+
+            assertFalse(
+                service.shouldRunIndexCatchUp(
+                    SearchRequest(query = "invoice", limit = 5, indexOnQuery = false),
+                ),
+            )
+        }
+
+    @Test
+    fun shouldRunIndexCatchUp_falseWhenIndexWarmAndRecentlySynced() =
+        runTest {
+            indexText(UUID.randomUUID(), "document", "warm index")
+            val checkpointStore = IndexingCheckpointStore(context)
+            checkpointStore.markPrioritySyncAt()
+            val serviceWithCheckpoint =
+                SemanticSearchService(
+                    embeddingGenerator = embeddingGenerator,
+                    imageEmbeddingGenerator = imageEmbeddingGenerator,
+                    vectorIndex = vectorIndex,
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    documentDao = FakeDocumentDao(documentRepository),
+                    searchIndexPipeline = pipeline,
+                    mediaStoreIngestionService = ingestionService,
+                    fullDeviceIndexer = null,
+                    indexingCheckpointStore = checkpointStore,
+                    logger = NoOpRuntimeLogger(),
+                )
+
+            assertFalse(
+                serviceWithCheckpoint.shouldRunIndexCatchUp(
+                    SearchRequest(query = "invoice", limit = 5, indexOnQuery = false),
+                ),
+            )
+        }
+
+    @Test
+    fun search_reusesCachedTextEmbeddingForDocAndPhotoPaths() =
+        runTest {
+            var embedCalls = 0
+            val countingGenerator =
+                object : EmbeddingGenerator by HashEmbeddingGenerator(dimension = 32) {
+                    override suspend fun embed(text: String): EmbeddingResult {
+                        embedCalls++
+                        return HashEmbeddingGenerator(dimension = 32).embed(text)
+                    }
+                }
+            val countingService =
+                SemanticSearchService(
+                    embeddingGenerator = countingGenerator,
+                    imageEmbeddingGenerator = imageEmbeddingGenerator,
+                    vectorIndex = vectorIndex,
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    documentDao = FakeDocumentDao(documentRepository),
+                    searchIndexPipeline = pipeline,
+                    mediaStoreIngestionService = ingestionService,
+                    fullDeviceIndexer = null,
+                    logger = NoOpRuntimeLogger(),
+                )
             val docId = UUID.randomUUID()
             val photoId = UUID.randomUUID()
             documentRepository.records[docId] = sampleDocument(docId, "Invoice", "/docs/invoice.pdf")
@@ -187,10 +196,11 @@ class SemanticSearchServiceTest {
             indexText(invoiceId, "document", "Quarterly Invoice financial report")
             indexText(beachId, "photo", "sunset beach vacation", EmbeddingMetadata.KIND_OCR)
 
-            val page = service.search(
-                request = SearchRequest(query = "invoice financial", limit = 5),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    request = SearchRequest(query = "invoice financial", limit = 5),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertTrue(page.count >= 1)
             assertEquals("document", page.items.first().objectType)
@@ -206,11 +216,12 @@ class SemanticSearchServiceTest {
 
             indexImage(mountainId, visualConcept.toByteArray())
 
-            val page = service.search(
-                request = SearchRequest(query = visualConcept, limit = 5, indexOnQuery = false),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_PHOTO),
-            )
+            val page =
+                service.search(
+                    request = SearchRequest(query = visualConcept, limit = 5, indexOnQuery = false),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_PHOTO),
+                )
 
             assertEquals(1, page.count)
             assertEquals(mountainId, page.items.first().objectId)
@@ -220,10 +231,11 @@ class SemanticSearchServiceTest {
     @Test
     fun search_emptyIndex_returnsEmptyResults() =
         runTest {
-            val page = service.search(
-                request = SearchRequest(query = "anything", limit = 5),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    request = SearchRequest(query = "anything", limit = 5),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(0, page.count)
         }
@@ -249,17 +261,21 @@ class SemanticSearchServiceTest {
         vectorIndex.insert(
             embeddingId = embeddingId,
             vector = result.vector,
-            metadata = buildMap {
-                put(EmbeddingMetadata.OBJECT_ID, objectId.toString())
-                put(EmbeddingMetadata.OBJECT_TYPE, objectType)
-                if (embeddingKind != null) {
-                    put(EmbeddingMetadata.EMBEDDING_KIND, embeddingKind)
-                }
-            },
+            metadata =
+                buildMap {
+                    put(EmbeddingMetadata.OBJECT_ID, objectId.toString())
+                    put(EmbeddingMetadata.OBJECT_TYPE, objectType)
+                    if (embeddingKind != null) {
+                        put(EmbeddingMetadata.EMBEDDING_KIND, embeddingKind)
+                    }
+                },
         )
     }
 
-    private suspend fun indexImage(objectId: UUID, imageBytes: ByteArray) {
+    private suspend fun indexImage(
+        objectId: UUID,
+        imageBytes: ByteArray,
+    ) {
         val result = imageEmbeddingGenerator.embedImage(imageBytes) as EmbeddingResult.Success
         val embeddingId = UUID.randomUUID()
         embeddingRepository.insert(
@@ -275,15 +291,20 @@ class SemanticSearchServiceTest {
         vectorIndex.insert(
             embeddingId = embeddingId,
             vector = result.vector,
-            metadata = mapOf(
-                EmbeddingMetadata.OBJECT_ID to objectId.toString(),
-                EmbeddingMetadata.OBJECT_TYPE to "photo",
-                EmbeddingMetadata.EMBEDDING_KIND to EmbeddingMetadata.KIND_IMAGE,
-            ),
+            metadata =
+                mapOf(
+                    EmbeddingMetadata.OBJECT_ID to objectId.toString(),
+                    EmbeddingMetadata.OBJECT_TYPE to "photo",
+                    EmbeddingMetadata.EMBEDDING_KIND to EmbeddingMetadata.KIND_IMAGE,
+                ),
         )
     }
 
-    private fun sampleDocument(id: UUID, name: String, path: String): DocumentEntity =
+    private fun sampleDocument(
+        id: UUID,
+        name: String,
+        path: String,
+    ): DocumentEntity =
         DocumentEntity(
             id = id,
             path = path,
@@ -300,7 +321,11 @@ class SemanticSearchServiceTest {
             importance = 0,
         )
 
-    private fun samplePhoto(id: UUID, ocrText: String?, uri: String): PhotoEntity =
+    private fun samplePhoto(
+        id: UUID,
+        ocrText: String?,
+        uri: String,
+    ): PhotoEntity =
         PhotoEntity(
             id = id,
             uri = uri,
@@ -315,8 +340,7 @@ class SemanticSearchServiceTest {
         )
 
     private class StubOcrEngine : OcrEngine {
-        override suspend fun recognize(imageBytes: ByteArray): OcrResult =
-            OcrResult.Failure("unused in semantic search test")
+        override suspend fun recognize(imageBytes: ByteArray): OcrResult = OcrResult.Failure("unused in semantic search test")
     }
 
     private class FakePhotoRepository : PhotoRepository {
@@ -365,10 +389,22 @@ class SemanticSearchServiceTest {
 
     private class FakeEmbeddingRepository : EmbeddingRepository {
         override suspend fun insert(embedding: com.nova.runtime.storage.entities.EmbeddingEntity) = Unit
+
         override suspend fun update(embedding: com.nova.runtime.storage.entities.EmbeddingEntity) = Unit
+
         override suspend fun delete(embeddingId: UUID) = Unit
+
         override suspend fun getById(embeddingId: UUID) = null
+
         override fun observeById(embeddingId: UUID): Flow<com.nova.runtime.storage.entities.EmbeddingEntity?> = emptyFlow()
+
+        override suspend fun listPersistedVectorsPage(
+            afterId: UUID?,
+            limit: Int,
+        ): List<com.nova.runtime.storage.entities.EmbeddingEntity> =
+            listWithPersistedVectors().filter { afterId == null || it.embeddingId.toString() > afterId.toString() }
+                .sortedBy { it.embeddingId.toString() }.take(limit)
+
         override suspend fun listWithPersistedVectors(): List<com.nova.runtime.storage.entities.EmbeddingEntity> = emptyList()
     }
 
@@ -376,44 +412,91 @@ class SemanticSearchServiceTest {
         private val repository: FakePhotoRepository,
     ) : PhotoDao {
         override suspend fun insert(photo: PhotoEntity) = repository.insert(photo)
+
         override suspend fun update(photo: PhotoEntity) = repository.update(photo)
+
         override suspend fun delete(photo: PhotoEntity) = repository.delete(photo.id)
+
         override suspend fun getById(id: UUID) = repository.getById(id)
+
         override fun observeById(id: UUID) = repository.observeById(id)
+
+        override suspend fun getExistingUris(uris: List<String>): List<String> = uris.filter { getByUri(it) != null }
+
         override suspend fun getByUri(uri: String) = repository.records.values.firstOrNull { it.uri == uri }
+
         override suspend fun searchByOcr(query: String) = emptyList<PhotoEntity>()
-        override suspend fun searchByOcrPaged(query: String, limit: Int, offset: Int) = emptyList<PhotoEntity>()
+
+        override suspend fun searchByOcrPaged(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ) = emptyList<PhotoEntity>()
+
         override suspend fun countByOcr(query: String) = 0
+
         override suspend fun listRecent(limit: Int) = repository.records.values.take(limit)
+
         override suspend fun listUnindexedWithOcr(limit: Int) =
             repository.records.values.filter { it.embeddingId == null && !it.ocrText.isNullOrBlank() }.take(limit)
-        override suspend fun listUnindexed(limit: Int) =
-            repository.records.values.filter { it.embeddingId == null }.take(limit)
+
+        override suspend fun listUnindexed(limit: Int) = repository.records.values.filter { it.embeddingId == null }.take(limit)
     }
 
     private class FakeDocumentDao(
         private val repository: FakeDocumentRepository,
     ) : DocumentDao {
         override suspend fun insert(document: DocumentEntity) = repository.insert(document)
+
         override suspend fun update(document: DocumentEntity) = repository.update(document)
+
         override suspend fun delete(document: DocumentEntity) = repository.delete(document.id)
+
         override suspend fun getById(id: UUID) = repository.getById(id)
+
         override fun observeById(id: UUID) = repository.observeById(id)
+
+        override suspend fun getExistingPaths(paths: List<String>): List<String> = paths.filter { getByPath(it) != null }
+
         override suspend fun getByPath(path: String) = repository.records.values.firstOrNull { it.path == path }
+
         override suspend fun searchByName(query: String) = emptyList<DocumentEntity>()
-        override suspend fun searchFullText(query: String, limit: Int, offset: Int) = emptyList<DocumentEntity>()
+
+        override suspend fun searchFullText(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ) = emptyList<DocumentEntity>()
+
         override suspend fun countFullText(query: String) = 0
+
         override suspend fun getByProjectId(projectId: UUID) = emptyList<DocumentEntity>()
-        override suspend fun listUnindexed(limit: Int) =
-            repository.records.values.filter { it.embeddingId == null }.take(limit)
+
+        override suspend fun listUnindexed(limit: Int) = repository.records.values.filter { it.embeddingId == null }.take(limit)
+
         override suspend fun listMissingContentText(limit: Int) =
             repository.records.values.filter { it.contentText.isNullOrBlank() }.take(limit)
-        override suspend fun listMissingSummary(limit: Int) =
-            repository.records.values.filter { it.summary == null }.take(limit)
+
+        override suspend fun listMissingSummary(limit: Int) = repository.records.values.filter { it.summary == null }.take(limit)
+
+        override fun observeAll(): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
+            kotlinx.coroutines.flow.flowOf(
+                repository.records.values.toList(),
+            )
+
+        override fun observeCount(): kotlinx.coroutines.flow.Flow<Int> = kotlinx.coroutines.flow.flowOf(repository.records.size)
+
+        override fun observeIndexedCount(): kotlinx.coroutines.flow.Flow<Int> =
+            kotlinx.coroutines.flow.flowOf(
+                repository.records.values.count {
+                    it.embeddingId != null
+                },
+            )
+
         override suspend fun countAll() = repository.records.size
-        override suspend fun countWithSummary() =
-            repository.records.values.count { !it.summary.isNullOrBlank() }
-        override suspend fun countMissingSummary() =
-            repository.records.values.count { it.summary.isNullOrBlank() }
+
+        override suspend fun countWithSummary() = repository.records.values.count { !it.summary.isNullOrBlank() }
+
+        override suspend fun countMissingSummary() = repository.records.values.count { it.summary.isNullOrBlank() }
     }
 }

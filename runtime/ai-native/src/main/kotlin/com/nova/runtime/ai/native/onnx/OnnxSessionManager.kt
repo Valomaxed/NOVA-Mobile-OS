@@ -6,13 +6,13 @@ import ai.onnxruntime.OrtSession
 import com.nova.runtime.ai.model.ModelAssetPaths
 import com.nova.runtime.ai.model.ModelLoader
 import com.nova.runtime.utils.logging.NovaLogger
-import java.nio.FloatBuffer
-import java.nio.LongBuffer
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.nio.FloatBuffer
+import java.nio.LongBuffer
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Lazy ONNX Runtime session manager with thread-safe init and explicit close.
@@ -36,28 +36,29 @@ class OnnxSessionManager(
 
     val isLoaded: Boolean get() = sessionRef.get() != null
 
-    suspend fun ensureLoaded(): OrtSession? = mutex.withLock {
-        sessionRef.get()?.let { return it }
+    suspend fun ensureLoaded(): OrtSession? =
+        mutex.withLock {
+            sessionRef.get()?.let { return it }
 
-        val path = modelLoader.resolvePath(fileName)
-        if (path == null) {
-            logger.debug(moduleTag, "Model not available: $fileName")
-            return null
-        }
-
-        return runCatching {
-            withContext(Dispatchers.IO) {
-                environment().createSession(path, OrtSession.SessionOptions())
-            }.also { session ->
-                sessionRef.set(session)
-                loadedPath = path
-                logger.info(moduleTag, "Loaded ONNX model $fileName from $path")
+            val path = modelLoader.resolvePath(fileName)
+            if (path == null) {
+                logger.debug(moduleTag, "Model not available: $fileName")
+                return null
             }
-        }.getOrElse { error ->
-            logger.warn(moduleTag, "Failed to load ONNX model $fileName: ${error.message}")
-            null
+
+            return runCatching {
+                withContext(Dispatchers.IO) {
+                    OrtSession.SessionOptions().use { options -> environment().createSession(path, options) }
+                }.also { session ->
+                    sessionRef.set(session)
+                    loadedPath = path
+                    logger.info(moduleTag, "Loaded ONNX model $fileName from $path")
+                }
+            }.getOrElse { error ->
+                logger.warn(moduleTag, "Failed to load ONNX model $fileName: ${error.message}")
+                null
+            }
         }
-    }
 
     suspend fun <T> withSession(block: suspend (OrtSession) -> T): T? {
         val session = ensureLoaded() ?: return null
@@ -73,14 +74,22 @@ class OnnxSessionManager(
 }
 
 object OnnxTensorUtils {
-    fun createLongTensor(env: OrtEnvironment, values: LongArray, shape: LongArray): OnnxTensor {
+    fun createLongTensor(
+        env: OrtEnvironment,
+        values: LongArray,
+        shape: LongArray,
+    ): OnnxTensor {
         val buffer = LongBuffer.allocate(values.size)
         buffer.put(values)
         buffer.rewind()
         return OnnxTensor.createTensor(env, buffer, shape)
     }
 
-    fun createFloatTensor(env: OrtEnvironment, values: FloatArray, shape: LongArray): OnnxTensor {
+    fun createFloatTensor(
+        env: OrtEnvironment,
+        values: FloatArray,
+        shape: LongArray,
+    ): OnnxTensor {
         val buffer = FloatBuffer.allocate(values.size)
         buffer.put(values)
         buffer.rewind()

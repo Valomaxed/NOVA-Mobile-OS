@@ -77,29 +77,48 @@ class DocumentRepositoryTest {
 
         override fun observeById(id: UUID): Flow<DocumentEntity?> = emptyFlow()
 
+        override suspend fun getExistingPaths(paths: List<String>): List<String> = paths.filter { getByPath(it) != null }
+
         override suspend fun getByPath(path: String): DocumentEntity? = records.values.firstOrNull { it.path == path }
 
         override suspend fun searchByName(query: String): List<DocumentEntity> =
             records.values.filter { it.name.contains(query, ignoreCase = true) }
 
-        override suspend fun searchFullText(query: String, limit: Int, offset: Int): List<DocumentEntity> =
-            searchByName(query).drop(offset).take(limit)
+        override suspend fun searchFullText(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ): List<DocumentEntity> = searchByName(query).drop(offset).take(limit)
 
         override suspend fun countFullText(query: String): Int = searchByName(query).size
 
-        override suspend fun getByProjectId(projectId: UUID): List<DocumentEntity> =
-            records.values.filter { it.projectId == projectId }
+        override suspend fun getByProjectId(projectId: UUID): List<DocumentEntity> = records.values.filter { it.projectId == projectId }
 
-        override suspend fun listUnindexed(limit: Int): List<DocumentEntity> =
-            records.values.filter { it.embeddingId == null }.take(limit)
+        override suspend fun listUnindexed(limit: Int): List<DocumentEntity> = records.values.filter { it.embeddingId == null }.take(limit)
+
         override suspend fun listMissingContentText(limit: Int): List<DocumentEntity> =
             records.values.filter { it.contentText == null }.take(limit)
-        override suspend fun listMissingSummary(limit: Int): List<DocumentEntity> =
-            records.values.filter { it.summary == null }.take(limit)
+
+        override suspend fun listMissingSummary(limit: Int): List<DocumentEntity> = records.values.filter { it.summary == null }.take(limit)
+
+        override fun observeAll(): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
+            kotlinx.coroutines.flow.flowOf(
+                records.values.toList(),
+            )
+
+        override fun observeCount(): kotlinx.coroutines.flow.Flow<Int> = kotlinx.coroutines.flow.flowOf(records.size)
+
+        override fun observeIndexedCount(): kotlinx.coroutines.flow.Flow<Int> =
+            kotlinx.coroutines.flow.flowOf(
+                records.values.count {
+                    it.embeddingId != null
+                },
+            )
+
         override suspend fun countAll() = records.size
-        override suspend fun countWithSummary() =
-            records.values.count { !it.summary.isNullOrBlank() }
-        override suspend fun countMissingSummary() =
-            records.values.count { it.summary.isNullOrBlank() }
+
+        override suspend fun countWithSummary() = records.values.count { !it.summary.isNullOrBlank() }
+
+        override suspend fun countMissingSummary() = records.values.count { it.summary.isNullOrBlank() }
     }
 }

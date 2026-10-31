@@ -39,6 +39,7 @@ val searchModule = module {
             documentRepository = get(),
             photoImageLoader = get(),
             documentTextExtractor = get<DocumentTextExtractor>(),
+            documentLibraryDao = get(),
         )
     }
 

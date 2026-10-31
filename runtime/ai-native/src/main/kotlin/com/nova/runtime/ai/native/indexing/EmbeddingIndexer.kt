@@ -10,6 +10,12 @@ import com.nova.runtime.storage.entities.EmbeddingEntity
 import com.nova.runtime.storage.repository.EmbeddingRepository
 import com.nova.runtime.storage.vector.VectorBlobCodec
 import java.util.UUID
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Coordinates OCR, embedding generation, metadata persistence, and vector indexing. */
 class EmbeddingIndexer(
@@ -19,6 +25,79 @@ class EmbeddingIndexer(
     private val vectorIndex: CosineVectorIndex,
     private val ocrEngine: OcrEngine,
 ) {
+    private val documentIndexMutex = Mutex()
+
+    suspend fun hasPassageIndex(embeddingId: UUID): Boolean =
+        embeddingRepository.getById(embeddingId)?.embeddingKind == EmbeddingMetadata.KIND_DOCUMENT_V2
+
+    suspend fun markDocumentIndexStale(embeddingId: UUID) {
+        embeddingRepository.getById(embeddingId)?.let {
+            embeddingRepository.update(it.copy(embeddingKind = "document-summary-stale"))
+        }
+    }
+
+    /** Prepare every vector before changing the previous searchable document. */
+    suspend fun indexDocumentPassages(
+        objectId: UUID,
+        discoveryText: String,
+        body: String,
+        commitDocument: suspend (UUID) -> Unit,
+    ): Boolean = documentIndexMutex.withLock {
+        val windows = try {
+            embeddingGenerator.passages(body)
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            return@withLock false
+        }
+        val inputs = listOf(EmbeddingMetadata.KIND_DOCUMENT_V2 to discoveryText) + windows.map {
+            "${EmbeddingMetadata.PASSAGE_PREFIX}${it.start}:${it.end}" to it.text
+        }
+        val prepared = mutableListOf<Pair<EmbeddingEntity, FloatArray>>()
+        for ((kind, text) in inputs) {
+            currentCoroutineContext().ensureActive()
+            val result = embeddingGenerator.embed(text)
+            if (result !is EmbeddingResult.Success) return@withLock false
+            if (result.vector.isEmpty() || result.vector.size != result.dimension || result.vector.any { !it.isFinite() }) return@withLock false
+            prepared += EmbeddingEntity(
+                embeddingId = UUID.randomUUID(),
+                objectType = "document",
+                objectId = objectId,
+                modelVersion = result.modelVersion,
+                dimension = result.dimension,
+                createdAt = System.currentTimeMillis(),
+                vectorBlob = VectorBlobCodec.encode(result.vector),
+                embeddingKind = kind,
+            ) to result.vector
+        }
+        val previous = embeddingRepository.getByObjectId(objectId).filter { it.objectType == "document" }
+        currentCoroutineContext().ensureActive()
+        // Once publishing begins, cancellation must not leave Room pointing at removed vectors.
+        withContext(NonCancellable) {
+            val inserted = mutableListOf<UUID>()
+            try {
+                for ((entity, _) in prepared) {
+                    embeddingRepository.insert(entity)
+                    inserted += entity.embeddingId
+                }
+                commitDocument(prepared.first().first.embeddingId)
+            } catch (error: Exception) {
+                inserted.forEach { id -> embeddingRepository.delete(id) }
+                throw error
+            }
+            for ((entity, vector) in prepared) {
+                vectorIndex.insert(
+                    entity.embeddingId, vector,
+                    buildMetadata(objectId, "document", entity.embeddingKind),
+                )
+            }
+            for (entity in previous) {
+                vectorIndex.delete(entity.embeddingId)
+                embeddingRepository.delete(entity.embeddingId)
+            }
+        }
+        true
+    }
+
     suspend fun indexText(
         objectId: UUID,
         objectType: String,
@@ -26,12 +105,10 @@ class EmbeddingIndexer(
         embeddingKind: String? = null,
         replaceExisting: Boolean = false,
     ): UUID? {
-        if (replaceExisting) {
-            vectorIndex.deleteByObjectId(objectId)
-        }
         val embeddingId = UUID.randomUUID()
         return when (val result = embeddingGenerator.embed(text)) {
             is EmbeddingResult.Success -> {
+                if (replaceExisting) vectorIndex.deleteByObjectId(objectId)
                 persistAndIndex(
                     embeddingId = embeddingId,
                     objectId = objectId,
@@ -131,6 +208,7 @@ class EmbeddingIndexer(
             if (embeddingKind != null) {
                 put(EmbeddingMetadata.EMBEDDING_KIND, embeddingKind)
             }
+            putAll(EmbeddingMetadata.passageMetadata(embeddingKind))
         }
 
     companion object {

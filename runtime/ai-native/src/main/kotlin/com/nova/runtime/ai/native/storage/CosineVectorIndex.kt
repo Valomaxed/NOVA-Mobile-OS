@@ -11,6 +11,8 @@ import java.util.UUID
 class CosineVectorIndex(
     private val delegate: InMemoryVectorIndex = InMemoryVectorIndex(),
 ) : VectorIndex {
+    val searchStats = delegate.searchStats
+
     override suspend fun insert(
         embeddingId: UUID,
         vector: FloatArray,
@@ -29,10 +31,11 @@ class CosineVectorIndex(
         ).map { hit ->
             VectorSearchResult(
                 embeddingId = hit.embeddingId,
-                objectId = UUID.fromString(
-                    hit.metadata["objectId"]
-                        ?: "00000000-0000-0000-0000-000000000000",
-                ),
+                objectId =
+                    UUID.fromString(
+                        hit.metadata["objectId"]
+                            ?: "00000000-0000-0000-0000-000000000000",
+                    ),
                 objectType = hit.metadata["objectType"] ?: "unknown",
                 score = hit.score,
                 metadata = hit.metadata,

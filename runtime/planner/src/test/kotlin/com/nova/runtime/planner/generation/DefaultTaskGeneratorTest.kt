@@ -13,6 +13,30 @@ class DefaultTaskGeneratorTest {
     private val generator = DefaultTaskGenerator()
 
     @Test
+    fun generate_searchCapabilitiesUseRegisteredSearchOperations() {
+        for (capability in listOf("search", "search.semantic", "search.photos")) {
+            val nir = Nir(
+                version = 1,
+                goal = "find test document",
+                entities = emptyList(),
+                constraints = mapOf("query" to "ORBIT-742"),
+                context = emptyMap(),
+                requiredCapabilities = listOf(capability),
+                confidence = 0.9,
+            )
+            val tasks = generator.generate(
+                subGoals = listOf(SubGoal("execute_capability:$capability", "search", capability, 0)),
+                nir = nir,
+                reasoningContext = ReasoningContext(emptyMap(), emptyList(), emptyList(), emptyList(), 0.9),
+            )
+            val execute = tasks.first { it.key.startsWith("execute:") }
+            assertEquals("search", execute.inputs["operation"])
+            assertEquals(if (capability == "search") "search.semantic" else capability, execute.inputs["capabilityType"])
+            assertEquals("ORBIT-742", execute.inputs["query"])
+        }
+    }
+
+    @Test
     fun generate_readCalendar_mapsCalendarReadOperation() {
         val nir = Nir(
             version = 1,

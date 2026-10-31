@@ -20,10 +20,10 @@ import com.nova.runtime.models.contracts.ActionPolicyGate
 import com.nova.runtime.models.contracts.ExecutionRequest
 import com.nova.runtime.models.contracts.ExecutionResult
 import com.nova.runtime.utils.logging.NovaLogger
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Execution Runtime — TDD §13 / MSP §9.
@@ -34,7 +34,6 @@ class ExecutionRuntimeImpl(
     private val eventPublisher: ExecutionEventPublisher,
     private val logger: NovaLogger,
 ) : ExecutionRuntime {
-
     private val activeExecutions = ConcurrentHashMap<String, ActiveGraphExecution>()
     private val controlMutex = Mutex()
 
@@ -42,11 +41,12 @@ class ExecutionRuntimeImpl(
         val graphId = request.graph.graphId.toString()
         val executionId = UUID.randomUUID()
 
-        val active = ActiveGraphExecution(
-            graphId = request.graph.graphId,
-            traceId = request.traceId,
-            executionId = executionId,
-        )
+        val active =
+            ActiveGraphExecution(
+                graphId = request.graph.graphId,
+                traceId = request.traceId,
+                executionId = executionId,
+            )
 
         controlMutex.withLock {
             if (activeExecutions.containsKey(graphId)) {
@@ -69,6 +69,7 @@ class ExecutionRuntimeImpl(
                 executionId = executionId,
                 pauseFlag = active.pauseFlag,
                 cancelFlag = active.cancelFlag,
+                controlState = active.controlState,
             )
         } finally {
             activeExecutions.remove(graphId)
@@ -79,6 +80,7 @@ class ExecutionRuntimeImpl(
         controlMutex.withLock {
             val active = activeExecutions[graphId] ?: return
             active.pauseFlag.set(true)
+            active.controlState.value = active.controlState.value.copy(paused = true)
             eventPublisher.publishGraphPaused(active.traceId, active.graphId)
             logger.info(RuntimeModule.EXECUTION.name, "Execution paused for graph $graphId", active.traceId)
         }
@@ -88,6 +90,7 @@ class ExecutionRuntimeImpl(
         controlMutex.withLock {
             val active = activeExecutions[graphId] ?: return
             active.pauseFlag.set(false)
+            active.controlState.value = active.controlState.value.copy(paused = false)
             eventPublisher.publishGraphResumed(active.traceId, active.graphId)
             logger.info(RuntimeModule.EXECUTION.name, "Execution resumed for graph $graphId", active.traceId)
         }
@@ -97,6 +100,7 @@ class ExecutionRuntimeImpl(
         controlMutex.withLock {
             val active = activeExecutions[graphId] ?: return
             active.cancelFlag.set(true)
+            active.controlState.value = active.controlState.value.copy(cancelled = true)
             logger.info(RuntimeModule.EXECUTION.name, "Execution cancel requested for graph $graphId", active.traceId)
         }
     }

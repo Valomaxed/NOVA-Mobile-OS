@@ -46,6 +46,14 @@ class DocumentSearchService(
                     }
                 }
             }
+            val namedFiles = DocumentContentRanker.explicitFileNames(normalizedQuery)
+            if (namedFiles.isNotEmpty()) {
+                val exact = namedFiles.flatMap { name ->
+                    documentDao.searchByName(name).filter { it.name.equals(name, ignoreCase = true) }
+                }.distinctBy { it.id }
+                entities = exact.drop(request.offset).take(request.limit)
+                totalCount = exact.size
+            }
             page = SearchPage(
                 items = rankDocumentHits(entities, effectiveQuery, normalizedQuery),
                 totalCount = totalCount,

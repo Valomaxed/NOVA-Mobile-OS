@@ -18,9 +18,8 @@ import com.nova.runtime.storage.search.DocumentSummaryGenerator
 /**
  * Ensures photos and documents are embedded and indexed before semantic search (DPS §9).
  *
- * Documents use two-stage retrieval:
- * - Stage A discovery embedding: `name + summary` ([EmbeddingMetadata.KIND_SUMMARY])
- * - Stage B answers / snippets: full [DocumentEntity.contentText]
+ * Documents retain discovery and overlapping, token-bounded body embeddings.
+ * Answers and excerpts are always taken from the persisted source text.
  */
 class SearchIndexPipeline(
     private val embeddingIndexer: EmbeddingIndexer,
@@ -30,6 +29,7 @@ class SearchIndexPipeline(
     private val documentRepository: DocumentRepository,
     private val photoImageLoader: PhotoImageLoader,
     private val documentTextExtractor: DocumentTextExtractor? = null,
+    private val documentLibraryDao: com.nova.runtime.storage.dao.DocumentLibraryDao? = null,
 ) {
     suspend fun ensureIndexed(request: IndexRequest) {
         if (request.indexPhotos) {
@@ -46,9 +46,11 @@ class SearchIndexPipeline(
     }
 
     suspend fun indexDocuments(limit: Int = DEFAULT_BATCH_LIMIT) {
-        val unindexed = documentDao.listUnindexed(limit)
-        val seen = unindexed.mapTo(mutableSetOf()) { it.id }
-        var remaining = (limit - unindexed.size).coerceAtLeast(0)
+        if (limit <= 0) return
+        val legacy = documentLibraryDao?.listNeedingPassages((limit / 5).coerceAtLeast(1)).orEmpty()
+        val unindexed = documentDao.listUnindexed((limit - legacy.size).coerceAtLeast(0))
+        val seen = (unindexed + legacy).mapTo(mutableSetOf()) { it.id }
+        var remaining = (limit - unindexed.size - legacy.size).coerceAtLeast(0)
 
         // Backfill: docs embedded before content extraction have embeddingId set but
         // contentText null — re-queue extractable ones within the same battery-sane batch.
@@ -63,12 +65,16 @@ class SearchIndexPipeline(
 
         // Backfill: docs missing discovery summaries (post-migration or content-only index).
         val needsSummary = if (remaining > 0) {
-            documentDao.listMissingSummary(remaining).filter { it.id !in seen }
+            documentDao.listMissingSummary(remaining).filter { it.id !in seen }.also { batch ->
+                seen += batch.map { it.id }
+                remaining = (remaining - batch.size).coerceAtLeast(0)
+            }
         } else {
             emptyList()
         }
 
         (unindexed + needsContent + needsSummary).forEach { document -> indexDocument(document) }
+        legacy.forEach { document -> indexDocument(document, forceExtract = true) }
     }
 
     suspend fun indexPhoto(photo: PhotoEntity) {
@@ -98,8 +104,8 @@ class SearchIndexPipeline(
     suspend fun indexDocument(document: DocumentEntity, forceExtract: Boolean = false) {
         val withContent = withExtractedContent(document, forceExtract)
         val contentChanged = withContent.contentText != document.contentText ||
-            withContent.contentExtractStatus != document.contentExtractStatus ||
-            withContent.contentExtractedAt != document.contentExtractedAt
+            withContent.contentExtractStatus != document.contentExtractStatus
+        val extractionAttemptChanged = withContent.contentExtractedAt != document.contentExtractedAt
         val forceSummary = document.summary.isNullOrBlank() || contentChanged
         val enriched = withGeneratedSummary(withContent, forceRegenerate = forceSummary)
         val summaryChanged = enriched.summary != document.summary
@@ -110,6 +116,7 @@ class SearchIndexPipeline(
             !summaryChanged &&
             !contentChanged
         ) {
+            if (extractionAttemptChanged) documentRepository.update(enriched)
             return
         }
         if (document.embeddingId != null &&
@@ -120,25 +127,31 @@ class SearchIndexPipeline(
             // Still try discovery embed from name/summary when content is empty.
         }
         // Already embedded with unchanged discovery text — nothing to do.
-        if (document.embeddingId != null && !contentChanged && !summaryChanged) return
+        if (document.embeddingId != null && !contentChanged && !summaryChanged &&
+            embeddingIndexer.hasPassageIndex(requireNotNull(document.embeddingId))
+        ) {
+            if (extractionAttemptChanged) documentRepository.update(enriched)
+            return
+        }
 
         val text = buildDocumentDiscoveryText(enriched)
-        val embeddingId = embeddingIndexer.indexText(
+        val indexed = embeddingIndexer.indexDocumentPassages(
             objectId = enriched.id,
-            objectType = OBJECT_TYPE_DOCUMENT,
-            text = text,
-            embeddingKind = EmbeddingMetadata.KIND_SUMMARY,
-            replaceExisting = document.embeddingId != null,
-        ) ?: run {
+            discoveryText = text,
+            body = enriched.contentText.orEmpty(),
+        ) { embeddingId ->
+            documentRepository.update(enriched.copy(embeddingId = embeddingId, indexedAt = System.currentTimeMillis()))
+        }
+        if (!indexed) {
+            if (document.embeddingId != null && (contentChanged || summaryChanged)) {
+                embeddingIndexer.markDocumentIndexStale(requireNotNull(document.embeddingId))
+            }
             // Persist extracted content/summary even when embedding fails so keyword search can use it.
-            if (contentChanged || summaryChanged) {
+            if (contentChanged || summaryChanged || extractionAttemptChanged) {
                 documentRepository.update(enriched)
             }
             return
         }
-        documentRepository.update(
-            enriched.copy(embeddingId = embeddingId, indexedAt = System.currentTimeMillis()),
-        )
     }
 
     /** Extracts document content (PDF/image via OCR, text/HTML/DOCX) when missing or blank. */
@@ -193,7 +206,7 @@ class SearchIndexPipeline(
             is DocumentExtractionResult.Unreadable ->
                 // Keep status FAILED with empty body so URI-permission recovery can retry.
                 document.copy(
-                    contentText = "",
+                    contentText = document.contentText.orEmpty(),
                     contentExtractStatus = ContentExtractStatus.FAILED,
                     contentExtractedAt = now,
                 )
@@ -238,7 +251,7 @@ class SearchIndexPipeline(
         const val OBJECT_TYPE_DOCUMENT = "document"
         const val DEFAULT_BATCH_LIMIT = 50
 
-        /** Discovery embeddings stay short — MiniLM truncates past ~512 tokens anyway. */
+        /** Discovery is additional to token-bounded body passages. */
         const val DISCOVERY_EMBED_CHARS = 512
     }
 }

@@ -41,6 +41,8 @@ object DocumentContentNormalizer {
     fun isGroundedAnswerable(content: String?): Boolean {
         if (content.isNullOrBlank()) return false
         val plain = toPlainText(content)
+        val invalid = plain.count { it == '\uFFFD' || (it.isISOControl() && !it.isWhitespace()) }
+        if (invalid > 2 && invalid.toDouble() / plain.length.coerceAtLeast(1) > 0.02) return false
         if (plain.length < MIN_ANSWERABLE_CHARS) return false
         // Reject pure markup leftovers / CSS variable soup.
         val letterDigits = plain.count { it.isLetterOrDigit() }
@@ -97,15 +99,24 @@ object DocumentContentNormalizer {
                 "&gt;" -> ">"
                 "&quot;" -> "\""
                 "&nbsp;" -> " "
-                else -> " "
+                else -> {
+                    val entity = match.value.removePrefix("&#").removeSuffix(";")
+                    val code = if (entity.startsWith("x", true)) entity.drop(1).toIntOrNull(16) else entity.toIntOrNull()
+                    if (code != null && Character.isValidCodePoint(code) && code !in 0xD800..0xDFFF) {
+                        String(Character.toChars(code))
+                    } else " "
+                }
             }
         }
 
     private fun normalizeWhitespace(value: String): String =
         value.lines()
             .map { it.replace(Regex("""[ \t\u00a0]+"""), " ").trim() }
-            .filter { it.isNotBlank() }
             .joinToString("\n")
+            .replace("\uFEFF", "")
+            .replace("\u00AD", "")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
 
     const val MIN_ANSWERABLE_CHARS = 24
 }

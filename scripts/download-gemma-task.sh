@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="${REPO_ROOT}/app/src/main/assets/models"
 mkdir -p "${TARGET_DIR}"
 
-FILE_NAME="Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task"
+FILE_NAME="Gemma3-1B-IT_multi-prefill-seq_q4_block128_ekv4096.task"
 
 if ! command -v huggingface-cli >/dev/null 2>&1; then
   echo "Install huggingface-cli: pip install 'huggingface_hub[cli]'"

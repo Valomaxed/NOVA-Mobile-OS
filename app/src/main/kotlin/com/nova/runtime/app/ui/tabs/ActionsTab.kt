@@ -20,10 +20,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -50,14 +49,14 @@ import com.nova.runtime.app.ui.components.NovaCard
 import com.nova.runtime.app.ui.components.NovaStatusChip
 import com.nova.runtime.app.ui.models.AutomationTaskItem
 import com.nova.runtime.app.ui.models.LiveTelemetryState
-import com.nova.runtime.app.ui.theme.NovaAkzidenzRed
+import com.nova.runtime.app.ui.theme.NovaAccentBlue
 import com.nova.runtime.app.ui.theme.NovaPureBlack
 import com.nova.runtime.app.ui.theme.NovaSecondaryGrey
 import com.nova.runtime.app.ui.theme.NovaSurfaceDim
 import com.nova.runtime.app.ui.theme.NovaSurfaceLowest
 
 /**
- * Objective Modernist ACTION (Task & Accessibility Automation) Tab.
+ * Connected app controls and queued tasks.
  * Driven 100% by real AccessibilityServiceBridge & WorkManager task queues.
  */
 @Composable
@@ -73,30 +72,33 @@ fun ActionsTab(
     var newTaskText by remember { mutableStateOf("") }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+        modifier =
+            modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         // Header
         Column {
             Text(
-                text = "ACTION ENGINE",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.02).sp,
-                ),
+                text = "Actions",
+                style =
+                    MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.02).sp,
+                    ),
                 color = NovaPureBlack,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(width = 2.dp, color = NovaAkzidenzRed, shape = RoundedCornerShape(0.dp))
-                    .padding(8.dp),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .background(NovaSurfaceLowest, RoundedCornerShape(16.dp))
+                        .padding(8.dp),
             ) {
                 Text(
-                    text = "Autonomous task execution and accessibility node graph routing.",
+                    text = "Manage tasks and connected app controls.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = NovaSecondaryGrey,
                 )
@@ -116,14 +118,14 @@ fun ActionsTab(
                 ) {
                     Column {
                         Text(
-                            text = "ACCESSIBILITY NODE TREE",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            text = "App controls",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = NovaPureBlack,
                         )
                         Text(
-                            text = if (isAccessibilityConn) "BRIDGE ACTIVE" else "BRIDGE DISCONNECTED",
+                            text = if (isAccessibilityConn) "Service connected" else "Service disconnected",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = if (isAccessibilityConn) NovaAkzidenzRed else NovaSecondaryGrey,
+                            color = if (isAccessibilityConn) NovaAccentBlue else NovaSecondaryGrey,
                         )
                     }
 
@@ -137,20 +139,20 @@ fun ActionsTab(
 
                 // Node Tree Display List
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(2.dp, NovaPureBlack, RoundedCornerShape(0.dp))
-                        .background(NovaSurfaceLowest, RoundedCornerShape(0.dp))
-                        .padding(12.dp),
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                            .background(NovaSurfaceLowest, RoundedCornerShape(16.dp))
+                            .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (nodeTree.isEmpty()) {
-                        // Fallback illustrative tree structure matching design
-                        TreeItemRow("[ROOT] android.widget.FrameLayout (System Window)")
-                        TreeItemRow("├── [NODE_01] android.widget.LinearLayout")
-                        TreeItemRow("│   ├── [BUTTON] com.whatsapp:id/send_btn ('Send')")
-                        TreeItemRow("│   └── [EDIT] com.whatsapp:id/entry ('Message input')")
-                        TreeItemRow("└── [NODE_02] android.widget.ScrollView")
+                        Text(
+                            text = if (isAccessibilityConn) "No controls found in the current window." else "Connect NOVA�s accessibility service to inspect app controls.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NovaSecondaryGrey,
+                        )
                     } else {
                         nodeTree.take(8).forEach { nodeStr ->
                             TreeItemRow(nodeStr)
@@ -161,14 +163,15 @@ fun ActionsTab(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 NovaButton(
-                    text = "INSPECT FULL GRAPH",
+                    text = "View app controls",
                     onClick = {
                         onExpandContent(
                             ContentDetailState(
                                 fileName = "ACCESSIBILITY TREE DUMP",
-                                text = "Live Accessibility Window Tree:\n• Service Connected: $isAccessibilityConn\n\nDump:\n" +
-                                    (if (nodeTree.isEmpty()) "No active window accessibility nodes found. Enable Nova Accessibility Service in Settings." else nodeTree.joinToString("\n")),
-                            )
+                                text =
+                                    "Live Accessibility Window Tree:\n• Service Connected: $isAccessibilityConn\n\nDump:\n" +
+                                        (if (nodeTree.isEmpty()) "No active window accessibility nodes found. Enable Nova Accessibility Service in Settings." else nodeTree.joinToString("\n")),
+                            ),
                         )
                     },
                     variant = NovaButtonVariant.SECONDARY,
@@ -197,14 +200,14 @@ fun ActionsTab(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "AUTOMATION QUEUE",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        text = "Task queue",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = NovaPureBlack,
                     )
                     Text(
                         text = "${tasksQueue.size} TASKS PENDING",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = NovaAkzidenzRed,
+                        color = NovaAccentBlue,
                     )
                 }
 
@@ -220,25 +223,27 @@ fun ActionsTab(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Enqueue new task...", style = MaterialTheme.typography.bodyMedium) },
                         singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = NovaAkzidenzRed,
-                            unfocusedBorderColor = NovaPureBlack,
-                            focusedContainerColor = NovaSurfaceLowest,
-                            unfocusedContainerColor = NovaSurfaceLowest,
-                        ),
+                        colors =
+                            OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = NovaAccentBlue,
+                                unfocusedBorderColor = NovaPureBlack,
+                                focusedContainerColor = NovaSurfaceLowest,
+                                unfocusedContainerColor = NovaSurfaceLowest,
+                            ),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(
-                            onDone = {
-                                if (newTaskText.isNotBlank()) {
-                                    viewModel.enqueueNewTask(newTaskText)
-                                    newTaskText = ""
-                                }
-                            }
-                        ),
+                        keyboardActions =
+                            KeyboardActions(
+                                onDone = {
+                                    if (newTaskText.isNotBlank()) {
+                                        viewModel.enqueueNewTask(newTaskText)
+                                        newTaskText = ""
+                                    }
+                                },
+                            ),
                     )
 
                     NovaButton(
-                        text = "ADD",
+                        text = "Add",
                         onClick = {
                             if (newTaskText.isNotBlank()) {
                                 viewModel.enqueueNewTask(newTaskText)
@@ -278,14 +283,14 @@ fun ActionsTab(
             ) {
                 Column {
                     Text(
-                        text = "NODE LATENCY",
+                        text = "Last command",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                         color = NovaSecondaryGrey,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "${"%.2f".format(telemetryState.nodeLatencyMs)} ms",
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        text = telemetryState.lastCommandLatencyMs?.let { "$it ms" } ?: "Not measured",
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = NovaPureBlack,
                     )
                 }
@@ -297,7 +302,7 @@ fun ActionsTab(
             ) {
                 Column {
                     Text(
-                        text = "SAFETY GATE",
+                        text = "Action review",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                         color = NovaSecondaryGrey,
                     )
@@ -306,16 +311,17 @@ fun ActionsTab(
                         Icon(
                             imageVector = Icons.Filled.CheckCircle,
                             contentDescription = "Safe",
-                            tint = NovaAkzidenzRed,
+                            tint = NovaAccentBlue,
                             modifier = Modifier.size(20.dp),
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "ENFORCED",
-                            style = MaterialTheme.typography.headlineMedium.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 18.sp,
-                            ),
+                            text = "Enabled",
+                            style =
+                                MaterialTheme.typography.headlineMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 18.sp,
+                                ),
                             color = NovaPureBlack,
                         )
                     }
@@ -331,10 +337,11 @@ fun ActionsTab(
 private fun TreeItemRow(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.bodySmall.copy(
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            fontSize = 11.sp,
-        ),
+        style =
+            MaterialTheme.typography.bodySmall.copy(
+                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                fontSize = 11.sp,
+            ),
         color = NovaPureBlack,
     )
 }
@@ -345,18 +352,19 @@ private fun TaskItemRow(
     onExpandContent: (ContentDetailState) -> Unit,
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(width = 1.dp, color = NovaPureBlack, shape = RoundedCornerShape(0.dp))
-            .clickable {
-                onExpandContent(
-                    ContentDetailState(
-                        fileName = "TASK #${task.id}: ${task.title}",
-                        text = "Task Details:\n• ID: ${task.id}\n• Title: ${task.title}\n• Status: ${task.status}\n• Progress: ${task.progressPercent}%\n• Dispatcher: WorkManager Background Thread",
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant, shape = RoundedCornerShape(16.dp))
+                .clickable {
+                    onExpandContent(
+                        ContentDetailState(
+                            fileName = "TASK #${task.id}: ${task.title}",
+                            text = "Task Details:\n• ID: ${task.id}\n• Title: ${task.title}\n• Status: ${task.status}\n• Progress: ${task.progressPercent}%\n• Dispatcher: WorkManager Background Thread",
+                        ),
                     )
-                )
-            }
-            .padding(12.dp),
+                }
+                .padding(12.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -366,8 +374,8 @@ private fun TaskItemRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "${task.indexLabel}.",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
-                    color = NovaAkzidenzRed,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = NovaAccentBlue,
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
@@ -387,10 +395,11 @@ private fun TaskItemRow(
             Spacer(modifier = Modifier.height(8.dp))
             LinearProgressIndicator(
                 progress = { task.progressPercent / 100f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp),
-                color = NovaAkzidenzRed,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(4.dp),
+                color = NovaAccentBlue,
                 trackColor = NovaSurfaceDim,
             )
         }

@@ -8,16 +8,17 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.nova.runtime.ai.io.readBoundedBytes
 import com.nova.runtime.ai.model.DocumentExtractionResult
 import com.nova.runtime.ai.model.DocumentOcrTextCleaner
 import com.nova.runtime.ai.model.DocumentTextExtractor
 import com.nova.runtime.ai.model.OcrEngine
 import com.nova.runtime.ai.model.OcrResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * Local document text extraction (DPS §7):
@@ -32,7 +33,6 @@ class AndroidDocumentTextExtractor(
     private val context: Context,
     private val ocrEngine: OcrEngine,
 ) : DocumentTextExtractor {
-
     override suspend fun extract(
         uri: String,
         mimeType: String,
@@ -63,37 +63,38 @@ class AndroidDocumentTextExtractor(
         mimeType: String,
         extension: String,
     ): DocumentExtractionResult {
-        val stream = openInputStream(uri)
-            ?: return DocumentExtractionResult.Unreadable("open_failed")
+        val stream = openInputStream(uri) ?: return DocumentExtractionResult.Unreadable("open_failed")
         return stream.use { input ->
-            input.bufferedReader().use { reader ->
-                val buffer = CharArray(maxChars)
-                val read = reader.read(buffer, 0, maxChars)
-                if (read <= 0) return@use DocumentExtractionResult.Empty
-                val raw = String(buffer, 0, read)
-                val plain = if (isHtml(mimeType, extension) || looksLikeHtml(raw)) {
-                    stripHtmlToPlain(raw)
-                } else {
-                    raw
-                }.take(maxChars)
-                if (plain.isBlank()) DocumentExtractionResult.Empty
-                else DocumentExtractionResult.Success(plain)
+            val raw = com.nova.runtime.ai.io.readDocumentText(input, maxChars)
+            if (raw.startsWith("%PDF-") || raw.startsWith("PK\u0003\u0004")) {
+                return@use DocumentExtractionResult.Unreadable("binary_content_mislabeled_as_text")
             }
+            val plain = if (isHtml(mimeType, extension) || looksLikeHtml(raw)) {
+                stripHtmlToPlain(raw)
+            } else raw
+            if (plain.isBlank()) DocumentExtractionResult.Empty else DocumentExtractionResult.Success(plain)
         }
     }
 
-    private suspend fun extractImageText(uri: String, maxChars: Int): DocumentExtractionResult {
-        val bytes = openInputStream(uri)?.use { it.readBytes() } ?: run {
-            Log.w(TAG, "Image open failed: $uri")
-            return DocumentExtractionResult.Unreadable("open_failed")
-        }
+    private suspend fun extractImageText(
+        uri: String,
+        maxChars: Int,
+    ): DocumentExtractionResult {
+        val bytes =
+            openInputStream(uri)?.use { it.readBoundedBytes(10 * 1024 * 1024) } ?: run {
+                Log.w(TAG, "Image open failed: $uri")
+                return DocumentExtractionResult.Unreadable("open_failed_or_image_too_large")
+            }
         if (bytes.isEmpty()) return DocumentExtractionResult.Empty
         return when (val result = ocrEngine.recognize(bytes)) {
             is OcrResult.Success -> {
                 val text = DocumentOcrTextCleaner.cleanScheduleText(result.text).take(maxChars)
                 Log.i(TAG, "Image OCR uri=$uri chars=${text.length}")
-                if (text.isBlank()) DocumentExtractionResult.Empty
-                else DocumentExtractionResult.Success(text)
+                if (text.isBlank()) {
+                    DocumentExtractionResult.Empty
+                } else {
+                    DocumentExtractionResult.Success(text)
+                }
             }
             is OcrResult.Failure -> {
                 Log.w(TAG, "Image OCR failed uri=$uri: ${result.message}")
@@ -102,7 +103,10 @@ class AndroidDocumentTextExtractor(
         }
     }
 
-    private fun isHtml(mimeType: String, extension: String): Boolean =
+    private fun isHtml(
+        mimeType: String,
+        extension: String,
+    ): Boolean =
         mimeType.equals("text/html", ignoreCase = true) ||
             extension.equals("html", ignoreCase = true) ||
             extension.equals("htm", ignoreCase = true)
@@ -118,12 +122,13 @@ class AndroidDocumentTextExtractor(
         text = text.replace(Regex("""(?i)<br\s*/?>"""), "\n")
         text = text.replace(Regex("""(?i)</td\s*>"""), " | ")
         text = text.replace(Regex("""(?is)<[^>]+>"""), " ")
-        text = text
-            .replace("&nbsp;", " ", ignoreCase = true)
-            .replace("&amp;", "&", ignoreCase = true)
-            .replace("&lt;", "<", ignoreCase = true)
-            .replace("&gt;", ">", ignoreCase = true)
-            .replace("&quot;", "\"", ignoreCase = true)
+        text =
+            text
+                .replace("&nbsp;", " ", ignoreCase = true)
+                .replace("&amp;", "&", ignoreCase = true)
+                .replace("&lt;", "<", ignoreCase = true)
+                .replace("&gt;", ">", ignoreCase = true)
+                .replace("&quot;", "\"", ignoreCase = true)
         return text.lines()
             .map { it.replace(Regex("""\s+"""), " ").trim() }
             .filter { it.isNotBlank() }
@@ -155,7 +160,7 @@ class AndroidDocumentTextExtractor(
         maxPages: Int,
         maxChars: Int,
     ): DocumentExtractionResult {
-        val digital = extractPdfDigitalText(uri, maxChars)
+        val digital = extractPdfDigitalText(uri, maxChars, maxPages)
         if (digital is DocumentExtractionResult.Success &&
             digital.text.length >= MIN_DIGITAL_PDF_CHARS
         ) {
@@ -165,8 +170,10 @@ class AndroidDocumentTextExtractor(
         val ocr = extractPdfViaOcr(uri, maxPages, maxChars)
         return when {
             ocr is DocumentExtractionResult.Success &&
-                (digital !is DocumentExtractionResult.Success ||
-                    ocr.text.length >= digital.text.length) -> ocr
+                (
+                    digital !is DocumentExtractionResult.Success ||
+                        ocr.text.length >= digital.text.length
+                ) -> ocr
             digital is DocumentExtractionResult.Success -> digital
             ocr is DocumentExtractionResult.Success -> ocr
             digital is DocumentExtractionResult.Unreadable -> digital
@@ -177,24 +184,35 @@ class AndroidDocumentTextExtractor(
         }
     }
 
-    private fun extractPdfDigitalText(uri: String, maxChars: Int): DocumentExtractionResult {
+    private fun extractPdfDigitalText(
+        uri: String,
+        maxChars: Int,
+        maxPages: Int,
+    ): DocumentExtractionResult {
         ensurePdfBoxLoaded()
-        val stream = openInputStream(uri)
-            ?: return DocumentExtractionResult.Unreadable("open_failed")
+        val stream =
+            openInputStream(uri)
+                ?: return DocumentExtractionResult.Unreadable("open_failed")
         return stream.use { input ->
             runCatching {
                 com.tom_roush.pdfbox.pdmodel.PDDocument.load(input).use { doc ->
-                    val stripper = com.tom_roush.pdfbox.text.PDFTextStripper().apply {
-                        startPage = 1
-                        endPage = doc.numberOfPages.coerceAtMost(DEFAULT_DIGITAL_PAGES)
+                    val stripper =
+                        com.tom_roush.pdfbox.text.PDFTextStripper().apply {
+                            sortByPosition = true
+                            startPage = 1
+                            endPage = doc.numberOfPages.coerceAtMost(maxPages)
+                        }
+                    val text =
+                        stripper.getText(doc)
+                            .replace(Regex("""[ \t]+\n"""), "\n")
+                            .replace(Regex("""\n{3,}"""), "\n\n")
+                            .trim()
+                            .take(maxChars)
+                    if (text.isBlank()) {
+                        DocumentExtractionResult.Empty
+                    } else {
+                        DocumentExtractionResult.Success(text)
                     }
-                    val text = stripper.getText(doc)
-                        .replace(Regex("""[ \t]+\n"""), "\n")
-                        .replace(Regex("""\n{3,}"""), "\n\n")
-                        .trim()
-                        .take(maxChars)
-                    if (text.isBlank()) DocumentExtractionResult.Empty
-                    else DocumentExtractionResult.Success(text)
                 }
             }.getOrElse { e ->
                 Log.w(TAG, "PDF digital extract failed uri=$uri: ${e.message}")
@@ -208,10 +226,11 @@ class AndroidDocumentTextExtractor(
         maxPages: Int,
         maxChars: Int,
     ): DocumentExtractionResult {
-        val descriptor = openFileDescriptor(uri) ?: run {
-            Log.w(TAG, "PDF open failed (no fd): $uri")
-            return DocumentExtractionResult.Unreadable("open_failed")
-        }
+        val descriptor =
+            openFileDescriptor(uri) ?: run {
+                Log.w(TAG, "PDF open failed (no fd): $uri")
+                return DocumentExtractionResult.Unreadable("open_failed")
+            }
         try {
             val renderer = PdfRenderer(descriptor)
             try {
@@ -233,8 +252,9 @@ class AndroidDocumentTextExtractor(
                         pageText == null -> ocrFailures++
                     }
                 }
-                val cleaned = DocumentOcrTextCleaner.cleanScheduleText(text.toString())
-                    .take(maxChars)
+                val cleaned =
+                    DocumentOcrTextCleaner.cleanScheduleText(text.toString())
+                        .take(maxChars)
                 Log.i(
                     TAG,
                     "PDF OCR uri=$uri totalPages=$totalPages processed=$pageCount " +
@@ -254,30 +274,20 @@ class AndroidDocumentTextExtractor(
         }
     }
 
-    private fun extractDocxText(uri: String, maxChars: Int): DocumentExtractionResult {
-        val stream = openInputStream(uri)
-            ?: return DocumentExtractionResult.Unreadable("open_failed")
+    private fun extractDocxText(
+        uri: String,
+        maxChars: Int,
+    ): DocumentExtractionResult {
+        val stream =
+            openInputStream(uri)
+                ?: return DocumentExtractionResult.Unreadable("open_failed")
         return stream.use { input ->
             runCatching {
                 java.util.zip.ZipInputStream(input.buffered()).use { zip ->
                     var entry = zip.nextEntry
                     while (entry != null) {
                         if (entry.name == "word/document.xml") {
-                            val xml = zip.bufferedReader().readText()
-                            val plain = xml
-                                .replace(Regex("""(?i)</w:p>"""), "\n")
-                                .replace(Regex("""(?i)<w:tab[^/]*/>"""), "\t")
-                                .replace(Regex("""(?is)<[^>]+>"""), " ")
-                                .replace(Regex("""&amp;"""), "&")
-                                .replace(Regex("""&lt;"""), "<")
-                                .replace(Regex("""&gt;"""), ">")
-                                .replace(Regex("""[ \t]+\n"""), "\n")
-                                .replace(Regex("""\n{3,}"""), "\n\n")
-                                .lines()
-                                .map { it.replace(Regex("""\s+"""), " ").trim() }
-                                .filter { it.isNotBlank() }
-                                .joinToString("\n")
-                                .take(maxChars)
+                            val plain = readWordXml(zip, maxChars)
                             return@use if (plain.isBlank()) {
                                 DocumentExtractionResult.Empty
                             } else {
@@ -295,6 +305,42 @@ class AndroidDocumentTextExtractor(
         }
     }
 
+    private fun readWordXml(input: java.io.InputStream, maxChars: Int): String {
+        val parser = android.util.Xml.newPullParser()
+        parser.setFeature(org.xmlpull.v1.XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        parser.setInput(input, null)
+        val result = StringBuilder()
+        var inText = false
+        var event = parser.eventType
+        while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT && result.length < maxChars) {
+            when (event) {
+                org.xmlpull.v1.XmlPullParser.START_TAG -> when (parser.name) {
+                    "t" -> inText = true
+                    "tab" -> result.append('\t')
+                    "br", "cr" -> result.append('\n')
+                }
+                org.xmlpull.v1.XmlPullParser.TEXT -> if (inText) {
+                    result.append(parser.text.take((maxChars - result.length).coerceAtLeast(0)))
+                }
+                org.xmlpull.v1.XmlPullParser.END_TAG -> when (parser.name) {
+                    "t" -> inText = false
+                    "p" -> result.append("\n\n")
+                    "tc" -> {
+                        while (result.isNotEmpty() && result.last().isWhitespace()) result.setLength(result.length - 1)
+                        result.append(" | ")
+                    }
+                    "tr" -> {
+                        if (result.endsWith(" | ")) result.setLength(result.length - 3)
+                        result.append('\n')
+                    }
+                }
+            }
+            event = parser.next()
+        }
+        return result.toString().take(maxChars).replace(Regex("[ \t]+\n"), "\n")
+            .replace(Regex("\n{3,}"), "\n\n").trim()
+    }
+
     private fun ensurePdfBoxLoaded() {
         if (pdfBoxReady) return
         synchronized(this) {
@@ -308,50 +354,64 @@ class AndroidDocumentTextExtractor(
         }
     }
 
-    private suspend fun renderPageAndRecognize(renderer: PdfRenderer, pageIndex: Int): String? {
+    private suspend fun renderPageAndRecognize(
+        renderer: PdfRenderer,
+        pageIndex: Int,
+    ): String? {
         val page = renderer.openPage(pageIndex)
-        val pageBytes = try {
-            val scale = (TARGET_RENDER_WIDTH_PX.toFloat() / page.width).coerceIn(MIN_SCALE, MAX_SCALE)
-            val width = (page.width * scale).toInt().coerceAtLeast(1)
-            val height = (page.height * scale).toInt().coerceAtLeast(1)
-            // Cap total pixels to avoid OOM on very tall pages while keeping OCR-readable DPI.
-            val maxPixels = MAX_RENDER_PIXELS.toLong()
-            val pixels = width.toLong() * height.toLong()
-            val (finalWidth, finalHeight) = if (pixels > maxPixels) {
-                val shrink = kotlin.math.sqrt(maxPixels.toDouble() / pixels.toDouble())
-                ((width * shrink).toInt().coerceAtLeast(1)) to
-                    ((height * shrink).toInt().coerceAtLeast(1))
-            } else {
-                width to height
+        val pageBytes =
+            try {
+                val scale = (TARGET_RENDER_WIDTH_PX.toFloat() / page.width).coerceIn(MIN_SCALE, MAX_SCALE)
+                val width = (page.width * scale).toInt().coerceAtLeast(1)
+                val height = (page.height * scale).toInt().coerceAtLeast(1)
+                // Cap total pixels to avoid OOM on very tall pages while keeping OCR-readable DPI.
+                val maxPixels = MAX_RENDER_PIXELS.toLong()
+                val pixels = width.toLong() * height.toLong()
+                val (finalWidth, finalHeight) =
+                    if (pixels > maxPixels) {
+                        val shrink = kotlin.math.sqrt(maxPixels.toDouble() / pixels.toDouble())
+                        ((width * shrink).toInt().coerceAtLeast(1)) to
+                            ((height * shrink).toInt().coerceAtLeast(1))
+                    } else {
+                        width to height
+                    }
+                val bitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
+                // PdfRenderer leaves undrawn regions transparent; OCR needs a white page background.
+                Canvas(bitmap).drawColor(Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val stream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                bitmap.recycle()
+                stream.toByteArray()
+            } finally {
+                page.close()
             }
-            val bitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
-            // PdfRenderer leaves undrawn regions transparent; OCR needs a white page background.
-            Canvas(bitmap).drawColor(Color.WHITE)
-            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-            bitmap.recycle()
-            stream.toByteArray()
-        } finally {
-            page.close()
-        }
         return when (val result = ocrEngine.recognize(pageBytes)) {
             is OcrResult.Success -> result.text
             is OcrResult.Failure -> null
         }
     }
 
-    private fun isPdf(mimeType: String, extension: String): Boolean =
+    private fun isPdf(
+        mimeType: String,
+        extension: String,
+    ): Boolean =
         mimeType.equals("application/pdf", ignoreCase = true) ||
             extension.equals("pdf", ignoreCase = true)
 
-    private fun isDocx(mimeType: String, extension: String): Boolean {
+    private fun isDocx(
+        mimeType: String,
+        extension: String,
+    ): Boolean {
         val ext = extension.lowercase()
         val mime = mimeType.lowercase()
         return ext == "docx" || mime.contains("wordprocessingml")
     }
 
-    private fun isPlainText(mimeType: String, extension: String): Boolean =
+    private fun isPlainText(
+        mimeType: String,
+        extension: String,
+    ): Boolean =
         mimeType.startsWith("text/", ignoreCase = true) ||
             extension.lowercase() in DocumentTextExtractor.PLAIN_TEXT_EXTENSIONS
 
@@ -360,13 +420,13 @@ class AndroidDocumentTextExtractor(
 
     private companion object {
         const val TAG = "NOVA/DocumentOCR"
+
         /** Wider render target improves small timetable/menu OCR without unbounded memory. */
         const val TARGET_RENDER_WIDTH_PX = 1600
         const val MIN_SCALE = 1.25f
         const val MAX_SCALE = 4f
         const val MAX_RENDER_PIXELS = 6_000_000
         const val MIN_DIGITAL_PDF_CHARS = 40
-        const val DEFAULT_DIGITAL_PAGES = 20
         const val MAX_OCR_PAGES = 24
     }
 }

@@ -5,17 +5,26 @@ package com.nova.runtime.ai.model
  * Implementations must never invent facts outside the provided context.
  */
 interface LocalLlmEngine {
+    /** Actual bundle context, including input and output; zero when unavailable. */
+    val contextWindowTokens: Int get() = 0
     /** True when a generative model file is loaded/available locally. */
     fun isAvailable(): Boolean
 
     /**
-     * Generate a short answer. Return null on failure so callers can fall back
+     * Generate an answer. Return null on failure so callers can fall back
      * to extractive formatting.
      */
     suspend fun generate(prompt: String, maxTokens: Int = DEFAULT_MAX_TOKENS): String?
 
+    /** Backends may fit the source to their tokenizer while preserving the instructions. */
+    suspend fun generateGrounded(
+        context: String,
+        buildPrompt: (String) -> String,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
+    ): String? = generate(buildPrompt(context), maxTokens)
+
     companion object {
-        const val DEFAULT_MAX_TOKENS = 512
+        const val DEFAULT_MAX_TOKENS = 1024
     }
 }
 

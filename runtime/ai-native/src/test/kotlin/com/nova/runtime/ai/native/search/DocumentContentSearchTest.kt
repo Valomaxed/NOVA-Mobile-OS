@@ -23,8 +23,6 @@ import com.nova.runtime.storage.repository.PhotoRepository
 import com.nova.runtime.storage.search.ContentExtractStatus
 import com.nova.runtime.storage.search.SearchRequest
 import com.nova.runtime.utils.logging.NoOpRuntimeLogger
-import java.time.LocalDate
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
@@ -39,6 +37,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.time.LocalDate
+import java.util.UUID
 
 /**
  * End-to-end coverage for PDF/document content indexing and date-intelligent retrieval:
@@ -54,14 +54,15 @@ class DocumentContentSearchTest {
     private lateinit var pipeline: SearchIndexPipeline
     private lateinit var service: SemanticSearchService
 
-    private val menuContent = buildString {
-        appendLine("WEEKLY MESS MENU")
-        java.time.DayOfWeek.entries.forEach { day ->
-            appendLine(day.name)
-            appendLine("Breakfast: breakfast-${day.name.lowercase()}")
-            appendLine("Lunch: lunch-${day.name.lowercase()}")
+    private val menuContent =
+        buildString {
+            appendLine("WEEKLY MESS MENU")
+            java.time.DayOfWeek.entries.forEach { day ->
+                appendLine(day.name)
+                appendLine("Breakfast: breakfast-${day.name.lowercase()}")
+                appendLine("Lunch: lunch-${day.name.lowercase()}")
+            }
         }
-    }
 
     @Before
     fun setUp() {
@@ -69,47 +70,51 @@ class DocumentContentSearchTest {
         embeddingGenerator = RecordingEmbeddingGenerator(HashEmbeddingGenerator(dimension = 32))
         documentRepository = FakeDocumentRepository()
         photoRepository = FakePhotoRepository()
-        val indexer = EmbeddingIndexer(
-            embeddingGenerator = embeddingGenerator,
-            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-            embeddingRepository = FakeEmbeddingRepository(),
-            vectorIndex = vectorIndex,
-            ocrEngine = StubOcrEngine(),
-        )
-        pipeline = SearchIndexPipeline(
-            embeddingIndexer = indexer,
-            photoDao = FakePhotoDao(photoRepository),
-            documentDao = FakeDocumentDao(documentRepository),
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            photoImageLoader = PhotoImageLoader { null },
-            documentTextExtractor = FakeDocumentTextExtractor(mapOf("content://docs/menu" to menuContent)),
-        )
-        val ingestionService = MediaStoreIngestionService(
-            mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
-            downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
-            documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
-            photoDao = FakePhotoDao(photoRepository),
-            documentDao = FakeDocumentDao(documentRepository),
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            embeddingIndexer = indexer,
-            searchIndexPipeline = pipeline,
-            photoImageLoader = PhotoImageLoader { null },
-            logger = NoOpRuntimeLogger(),
-        )
-        service = SemanticSearchService(
-            embeddingGenerator = embeddingGenerator,
-            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-            vectorIndex = vectorIndex,
-            photoRepository = photoRepository,
-            documentRepository = documentRepository,
-            documentDao = FakeDocumentDao(documentRepository),
-            searchIndexPipeline = pipeline,
-            mediaStoreIngestionService = ingestionService,
-            fullDeviceIndexer = null,
-            logger = NoOpRuntimeLogger(),
-        )
+        val indexer =
+            EmbeddingIndexer(
+                embeddingGenerator = embeddingGenerator,
+                imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                embeddingRepository = FakeEmbeddingRepository(),
+                vectorIndex = vectorIndex,
+                ocrEngine = StubOcrEngine(),
+            )
+        pipeline =
+            SearchIndexPipeline(
+                embeddingIndexer = indexer,
+                photoDao = FakePhotoDao(photoRepository),
+                documentDao = FakeDocumentDao(documentRepository),
+                photoRepository = photoRepository,
+                documentRepository = documentRepository,
+                photoImageLoader = PhotoImageLoader { null },
+                documentTextExtractor = FakeDocumentTextExtractor(mapOf("content://docs/menu" to menuContent)),
+            )
+        val ingestionService =
+            MediaStoreIngestionService(
+                mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
+                downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
+                documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                photoDao = FakePhotoDao(photoRepository),
+                documentDao = FakeDocumentDao(documentRepository),
+                photoRepository = photoRepository,
+                documentRepository = documentRepository,
+                embeddingIndexer = indexer,
+                searchIndexPipeline = pipeline,
+                photoImageLoader = PhotoImageLoader { null },
+                logger = NoOpRuntimeLogger(),
+            )
+        service =
+            SemanticSearchService(
+                embeddingGenerator = embeddingGenerator,
+                imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                vectorIndex = vectorIndex,
+                photoRepository = photoRepository,
+                documentRepository = documentRepository,
+                documentDao = FakeDocumentDao(documentRepository),
+                searchIndexPipeline = pipeline,
+                mediaStoreIngestionService = ingestionService,
+                fullDeviceIndexer = null,
+                logger = NoOpRuntimeLogger(),
+            )
     }
 
     @Test
@@ -129,11 +134,12 @@ class DocumentContentSearchTest {
             assertTrue(stored.summary!!.contains("mess-menu.pdf"))
             assertTrue(stored.summary!!.contains("WEEKLY MESS MENU"))
             assertNotNull(stored.embeddingId)
-            val indexedText = embeddingGenerator.lastEmbeddedText.orEmpty()
+            val indexedText = embeddingGenerator.embeddedTexts.first()
             assertTrue(indexedText.contains("mess-menu.pdf"))
             assertTrue(indexedText.contains("WEEKLY MESS MENU"))
-            // Discovery embedding must stay short — not the full content body.
+            // Discovery stays short; additional passage vectors now cover the body.
             assertTrue(indexedText.length < menuContent.length)
+            assertTrue(embeddingGenerator.embeddedTexts.drop(1).joinToString(" ").contains("WEEKLY MESS MENU"))
         }
 
     @Test
@@ -141,27 +147,30 @@ class DocumentContentSearchTest {
         runTest {
             val document = menuDocument()
             documentRepository.records[document.id] = document
-            val sequenceExtractor = SequenceDocumentTextExtractor(
-                mutableListOf(
-                    DocumentExtractionResult.Unreadable("open_failed"),
-                    DocumentExtractionResult.Success(menuContent),
-                ),
-            )
-            val retryPipeline = SearchIndexPipeline(
-                embeddingIndexer = EmbeddingIndexer(
-                    embeddingGenerator = embeddingGenerator,
-                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                    embeddingRepository = FakeEmbeddingRepository(),
-                    vectorIndex = vectorIndex,
-                    ocrEngine = StubOcrEngine(),
-                ),
-                photoDao = FakePhotoDao(photoRepository),
-                documentDao = FakeDocumentDao(documentRepository),
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                photoImageLoader = PhotoImageLoader { null },
-                documentTextExtractor = sequenceExtractor,
-            )
+            val sequenceExtractor =
+                SequenceDocumentTextExtractor(
+                    mutableListOf(
+                        DocumentExtractionResult.Unreadable("open_failed"),
+                        DocumentExtractionResult.Success(menuContent),
+                    ),
+                )
+            val retryPipeline =
+                SearchIndexPipeline(
+                    embeddingIndexer =
+                        EmbeddingIndexer(
+                            embeddingGenerator = embeddingGenerator,
+                            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                            embeddingRepository = FakeEmbeddingRepository(),
+                            vectorIndex = vectorIndex,
+                            ocrEngine = StubOcrEngine(),
+                        ),
+                    photoDao = FakePhotoDao(photoRepository),
+                    documentDao = FakeDocumentDao(documentRepository),
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    photoImageLoader = PhotoImageLoader { null },
+                    documentTextExtractor = sequenceExtractor,
+                )
 
             retryPipeline.indexDocument(document, forceExtract = true)
             val failed = documentRepository.records[document.id]!!
@@ -178,20 +187,22 @@ class DocumentContentSearchTest {
     @Test
     fun indexDocument_withoutExtractor_keepsMetadataOnlyBehavior() =
         runTest {
-            val bare = SearchIndexPipeline(
-                embeddingIndexer = EmbeddingIndexer(
-                    embeddingGenerator = embeddingGenerator,
-                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                    embeddingRepository = FakeEmbeddingRepository(),
-                    vectorIndex = vectorIndex,
-                    ocrEngine = StubOcrEngine(),
-                ),
-                photoDao = FakePhotoDao(photoRepository),
-                documentDao = FakeDocumentDao(documentRepository),
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                photoImageLoader = PhotoImageLoader { null },
-            )
+            val bare =
+                SearchIndexPipeline(
+                    embeddingIndexer =
+                        EmbeddingIndexer(
+                            embeddingGenerator = embeddingGenerator,
+                            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                            embeddingRepository = FakeEmbeddingRepository(),
+                            vectorIndex = vectorIndex,
+                            ocrEngine = StubOcrEngine(),
+                        ),
+                    photoDao = FakePhotoDao(photoRepository),
+                    documentDao = FakeDocumentDao(documentRepository),
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    photoImageLoader = PhotoImageLoader { null },
+                )
             val document = menuDocument()
             documentRepository.records[document.id] = document
 
@@ -208,11 +219,12 @@ class DocumentContentSearchTest {
             documentRepository.records[document.id] = document
             pipeline.indexDocument(document)
 
-            val page = service.search(
-                request = SearchRequest(query = "todays mess menu", limit = 5, indexOnQuery = false),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                service.search(
+                    request = SearchRequest(query = "todays mess menu", limit = 5, indexOnQuery = false),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
 
             assertTrue(page.count >= 1)
             val hit = page.items.first()
@@ -235,11 +247,12 @@ class DocumentContentSearchTest {
             documentRepository.records[document.id] = document
             pipeline.indexDocument(document)
 
-            val page = service.search(
-                request = SearchRequest(query = "mess menu", limit = 5, indexOnQuery = false),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                service.search(
+                    request = SearchRequest(query = "mess menu", limit = 5, indexOnQuery = false),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
 
             assertTrue(page.count >= 1)
             val contentSnippet = page.items.first().contentSnippet
@@ -254,15 +267,17 @@ class DocumentContentSearchTest {
             documentRepository.records[document.id] = document
             pipeline.indexDocument(document)
 
-            val page = service.search(
-                request = SearchRequest(
-                    query = "this months mess menu",
-                    limit = 5,
-                    indexOnQuery = false,
-                ),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                service.search(
+                    request =
+                        SearchRequest(
+                            query = "this months mess menu",
+                            limit = 5,
+                            indexOnQuery = false,
+                        ),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
 
             assertTrue(page.count >= 1)
             assertEquals(document.id, page.items.first().objectId)
@@ -296,11 +311,12 @@ class DocumentContentSearchTest {
     @Test
     fun indexDocuments_backfillsMissingSummary() =
         runTest {
-            val stale = menuDocument().copy(
-                embeddingId = UUID.randomUUID(),
-                contentText = menuContent,
-                summary = null,
-            )
+            val stale =
+                menuDocument().copy(
+                    embeddingId = UUID.randomUUID(),
+                    contentText = menuContent,
+                    summary = null,
+                )
             documentRepository.records[stale.id] = stale
 
             pipeline.indexDocuments(limit = 10)
@@ -314,106 +330,117 @@ class DocumentContentSearchTest {
     @Test
     fun search_hybridRank_prefersDistinctiveFilenameOverNoisyLongContent() =
         runTest {
-            val noisyOther = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/noise",
-                name = "random-notes.pdf",
-                extension = "pdf",
-                mimeType = "application/pdf",
-                size = 100L,
-                checksum = "",
-                createdAt = System.currentTimeMillis(),
-                modifiedAt = System.currentTimeMillis(),
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
-            val prospectus = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/bookly",
-                name = "BooklyProspectusReport.pdf",
-                extension = "pdf",
-                mimeType = "application/pdf",
-                size = 100L,
-                checksum = "",
-                createdAt = System.currentTimeMillis(),
-                modifiedAt = System.currentTimeMillis(),
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
-            val noiseBody = buildString {
-                repeat(200) { append("generic campus handbook chapter about mess dining prospectus placements ") }
-            }
+            val noisyOther =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/noise",
+                    name = "random-notes.pdf",
+                    extension = "pdf",
+                    mimeType = "application/pdf",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = System.currentTimeMillis(),
+                    modifiedAt = System.currentTimeMillis(),
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
+            val prospectus =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/bookly",
+                    name = "BooklyProspectusReport.pdf",
+                    extension = "pdf",
+                    mimeType = "application/pdf",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = System.currentTimeMillis(),
+                    modifiedAt = System.currentTimeMillis(),
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
+            val noiseBody =
+                buildString {
+                    repeat(200) { append("generic campus handbook chapter about mess dining prospectus placements ") }
+                }
             val booklyBody = "BOOKLY PROSPECTUS REPORT\nCompany overview and placement outcomes for Bookly."
             // Rebind pipeline extractor for this test's URIs.
-            val localPipeline = SearchIndexPipeline(
-                embeddingIndexer = EmbeddingIndexer(
-                    embeddingGenerator = embeddingGenerator,
-                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                    embeddingRepository = FakeEmbeddingRepository(),
-                    vectorIndex = vectorIndex,
-                    ocrEngine = StubOcrEngine(),
-                ),
-                photoDao = FakePhotoDao(photoRepository),
-                documentDao = FakeDocumentDao(documentRepository),
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                photoImageLoader = PhotoImageLoader { null },
-                documentTextExtractor = FakeDocumentTextExtractor(
-                    mapOf(
-                        "content://docs/noise" to noiseBody,
-                        "content://docs/bookly" to booklyBody,
-                    ),
-                ),
-            )
-            val localService = SemanticSearchService(
-                embeddingGenerator = embeddingGenerator,
-                imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                vectorIndex = vectorIndex,
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                documentDao = FakeDocumentDao(documentRepository),
-                searchIndexPipeline = localPipeline,
-                mediaStoreIngestionService = MediaStoreIngestionService(
-                    mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
-                    downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
-                    documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+            val localPipeline =
+                SearchIndexPipeline(
+                    embeddingIndexer =
+                        EmbeddingIndexer(
+                            embeddingGenerator = embeddingGenerator,
+                            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                            embeddingRepository = FakeEmbeddingRepository(),
+                            vectorIndex = vectorIndex,
+                            ocrEngine = StubOcrEngine(),
+                        ),
                     photoDao = FakePhotoDao(photoRepository),
                     documentDao = FakeDocumentDao(documentRepository),
                     photoRepository = photoRepository,
                     documentRepository = documentRepository,
-                    embeddingIndexer = EmbeddingIndexer(
-                        embeddingGenerator = embeddingGenerator,
-                        imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                        embeddingRepository = FakeEmbeddingRepository(),
-                        vectorIndex = vectorIndex,
-                        ocrEngine = StubOcrEngine(),
-                    ),
-                    searchIndexPipeline = localPipeline,
                     photoImageLoader = PhotoImageLoader { null },
+                    documentTextExtractor =
+                        FakeDocumentTextExtractor(
+                            mapOf(
+                                "content://docs/noise" to noiseBody,
+                                "content://docs/bookly" to booklyBody,
+                            ),
+                        ),
+                )
+            val localService =
+                SemanticSearchService(
+                    embeddingGenerator = embeddingGenerator,
+                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                    vectorIndex = vectorIndex,
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    documentDao = FakeDocumentDao(documentRepository),
+                    searchIndexPipeline = localPipeline,
+                    mediaStoreIngestionService =
+                        MediaStoreIngestionService(
+                            mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
+                            downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
+                            documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                            photoDao = FakePhotoDao(photoRepository),
+                            documentDao = FakeDocumentDao(documentRepository),
+                            photoRepository = photoRepository,
+                            documentRepository = documentRepository,
+                            embeddingIndexer =
+                                EmbeddingIndexer(
+                                    embeddingGenerator = embeddingGenerator,
+                                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                                    embeddingRepository = FakeEmbeddingRepository(),
+                                    vectorIndex = vectorIndex,
+                                    ocrEngine = StubOcrEngine(),
+                                ),
+                            searchIndexPipeline = localPipeline,
+                            photoImageLoader = PhotoImageLoader { null },
+                            logger = NoOpRuntimeLogger(),
+                        ),
+                    fullDeviceIndexer = null,
                     logger = NoOpRuntimeLogger(),
-                ),
-                fullDeviceIndexer = null,
-                logger = NoOpRuntimeLogger(),
-            )
+                )
 
             documentRepository.records[noisyOther.id] = noisyOther
             documentRepository.records[prospectus.id] = prospectus
             localPipeline.indexDocument(noisyOther)
             localPipeline.indexDocument(prospectus)
 
-            val page = localService.search(
-                request = SearchRequest(
-                    query = "bookly prospectus report",
-                    limit = 5,
-                    indexOnQuery = false,
-                ),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                localService.search(
+                    request =
+                        SearchRequest(
+                            query = "bookly prospectus report",
+                            limit = 5,
+                            indexOnQuery = false,
+                        ),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
 
             assertTrue(page.count >= 1)
             assertEquals(prospectus.id, page.items.first().objectId)
@@ -434,11 +461,12 @@ class DocumentContentSearchTest {
             assertTrue(stored.summary!!.length < stored.contentText!!.length)
             val summaryBeforeSearch = stored.summary
 
-            val page = service.search(
-                request = SearchRequest(query = "todays mess menu", limit = 5, indexOnQuery = false),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                service.search(
+                    request = SearchRequest(query = "todays mess menu", limit = 5, indexOnQuery = false),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
 
             assertEquals(document.id, page.items.first().objectId)
             val today = LocalDate.now().dayOfWeek
@@ -456,98 +484,108 @@ class DocumentContentSearchTest {
         runTest {
             val now = System.currentTimeMillis()
             val oldDays = 120L * 24 * 60 * 60 * 1000
-            val oldTimetable = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/old-timetable",
-                name = "timetable.pdf",
-                extension = "pdf",
-                mimeType = "application/pdf",
-                size = 100L,
-                checksum = "",
-                createdAt = now - oldDays,
-                modifiedAt = now - oldDays,
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
-            val newTimetable = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/new-timetable",
-                name = "class-schedule-aug.pdf",
-                extension = "pdf",
-                mimeType = "application/pdf",
-                size = 100L,
-                checksum = "",
-                createdAt = now,
-                modifiedAt = now,
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
+            val oldTimetable =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/old-timetable",
+                    name = "timetable.pdf",
+                    extension = "pdf",
+                    mimeType = "application/pdf",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = now - oldDays,
+                    modifiedAt = now - oldDays,
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
+            val newTimetable =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/new-timetable",
+                    name = "class-schedule-aug.pdf",
+                    extension = "pdf",
+                    mimeType = "application/pdf",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = now,
+                    modifiedAt = now,
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
             val todayName = LocalDate.now().dayOfWeek.name
-            val oldBody = """
+            val oldBody =
+                """
                 WEEKLY TIMETABLE
                 $todayName
                 08:00-09:00 OLD Physics
-            """.trimIndent()
-            val newBody = """
+                """.trimIndent()
+            val newBody =
+                """
                 WEEKLY TIMETABLE
                 $todayName
                 12:00-13:00 NEW DSP
                 13:00-14:00 NEW Data Structures
-            """.trimIndent()
-            val localPipeline = SearchIndexPipeline(
-                embeddingIndexer = EmbeddingIndexer(
-                    embeddingGenerator = embeddingGenerator,
-                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                    embeddingRepository = FakeEmbeddingRepository(),
-                    vectorIndex = vectorIndex,
-                    ocrEngine = StubOcrEngine(),
-                ),
-                photoDao = FakePhotoDao(photoRepository),
-                documentDao = FakeDocumentDao(documentRepository),
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                photoImageLoader = PhotoImageLoader { null },
-                documentTextExtractor = FakeDocumentTextExtractor(
-                    mapOf(
-                        "content://docs/old-timetable" to oldBody,
-                        "content://docs/new-timetable" to newBody,
-                    ),
-                ),
-            )
-            val localService = SemanticSearchService(
-                embeddingGenerator = embeddingGenerator,
-                imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                vectorIndex = vectorIndex,
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                documentDao = FakeDocumentDao(documentRepository),
-                searchIndexPipeline = localPipeline,
-                mediaStoreIngestionService = MediaStoreIngestionService(
-                    mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
-                    downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
-                    documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                """.trimIndent()
+            val localPipeline =
+                SearchIndexPipeline(
+                    embeddingIndexer =
+                        EmbeddingIndexer(
+                            embeddingGenerator = embeddingGenerator,
+                            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                            embeddingRepository = FakeEmbeddingRepository(),
+                            vectorIndex = vectorIndex,
+                            ocrEngine = StubOcrEngine(),
+                        ),
                     photoDao = FakePhotoDao(photoRepository),
                     documentDao = FakeDocumentDao(documentRepository),
                     photoRepository = photoRepository,
                     documentRepository = documentRepository,
-                    embeddingIndexer = EmbeddingIndexer(
-                        embeddingGenerator = embeddingGenerator,
-                        imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                        embeddingRepository = FakeEmbeddingRepository(),
-                        vectorIndex = vectorIndex,
-                        ocrEngine = StubOcrEngine(),
-                    ),
-                    searchIndexPipeline = localPipeline,
                     photoImageLoader = PhotoImageLoader { null },
+                    documentTextExtractor =
+                        FakeDocumentTextExtractor(
+                            mapOf(
+                                "content://docs/old-timetable" to oldBody,
+                                "content://docs/new-timetable" to newBody,
+                            ),
+                        ),
+                )
+            val localService =
+                SemanticSearchService(
+                    embeddingGenerator = embeddingGenerator,
+                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                    vectorIndex = vectorIndex,
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    documentDao = FakeDocumentDao(documentRepository),
+                    searchIndexPipeline = localPipeline,
+                    mediaStoreIngestionService =
+                        MediaStoreIngestionService(
+                            mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
+                            downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
+                            documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                            photoDao = FakePhotoDao(photoRepository),
+                            documentDao = FakeDocumentDao(documentRepository),
+                            photoRepository = photoRepository,
+                            documentRepository = documentRepository,
+                            embeddingIndexer =
+                                EmbeddingIndexer(
+                                    embeddingGenerator = embeddingGenerator,
+                                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                                    embeddingRepository = FakeEmbeddingRepository(),
+                                    vectorIndex = vectorIndex,
+                                    ocrEngine = StubOcrEngine(),
+                                ),
+                            searchIndexPipeline = localPipeline,
+                            photoImageLoader = PhotoImageLoader { null },
+                            logger = NoOpRuntimeLogger(),
+                        ),
+                    fullDeviceIndexer = null,
                     logger = NoOpRuntimeLogger(),
-                ),
-                fullDeviceIndexer = null,
-                logger = NoOpRuntimeLogger(),
-            )
+                )
 
             documentRepository.records[oldTimetable.id] = oldTimetable
             documentRepository.records[newTimetable.id] = newTimetable
@@ -555,11 +593,12 @@ class DocumentContentSearchTest {
             localPipeline.indexDocument(newTimetable)
 
             for (query in listOf("latest timetable", "timetable", "current schedule")) {
-                val page = localService.search(
-                    request = SearchRequest(query = query, limit = 5, indexOnQuery = false),
-                    traceId = UUID.randomUUID(),
-                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-                )
+                val page =
+                    localService.search(
+                        request = SearchRequest(query = query, limit = 5, indexOnQuery = false),
+                        traceId = UUID.randomUUID(),
+                        objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                    )
                 assertTrue("expected hits for $query", page.count >= 1)
                 assertEquals(
                     "expected newest timetable for query=$query",
@@ -575,111 +614,122 @@ class DocumentContentSearchTest {
     fun search_timetable_prefersRichSemesterGridOverToyStub() =
         runTest {
             val now = System.currentTimeMillis()
-            val toy = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/weekly_timetable.txt",
-                name = "weekly_timetable.txt",
-                extension = "txt",
-                mimeType = "text/plain",
-                size = 100L,
-                checksum = "",
-                createdAt = now,
-                modifiedAt = now, // newer — would win on pure recency
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
-            val rich = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/timetable_iitd.html",
-                name = "timetable_iitd.html",
-                extension = "html",
-                mimeType = "text/html",
-                size = 8000L,
-                checksum = "",
-                createdAt = now - 10_000,
-                modifiedAt = now - 10_000,
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
+            val toy =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/weekly_timetable.txt",
+                    name = "weekly_timetable.txt",
+                    extension = "txt",
+                    mimeType = "text/plain",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = now,
+                    modifiedAt = now, // newer — would win on pure recency
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
+            val rich =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/timetable_iitd.html",
+                    name = "timetable_iitd.html",
+                    extension = "html",
+                    mimeType = "text/html",
+                    size = 8000L,
+                    checksum = "",
+                    createdAt = now - 10_000,
+                    modifiedAt = now - 10_000,
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
             val todayName = LocalDate.now().dayOfWeek.name
-            val toyBody = """
+            val toyBody =
+                """
                 WEEKLY TIMETABLE
                 $todayName
                 09:00-10:00 Physics
                 12:00-13:00 DSP
-            """.trimIndent()
-            val richBody = """
+                """.trimIndent()
+            val richBody =
+                """
                 Semester 3 Timetable
                 Time | Monday | Tuesday | Wednesday | Thursday | Friday
                 8:00 AM - 9:00 AM | Free | Lec-AAA1111 | Lec-AAA1111 | Free | Lec-AAA1111
                 9:30 AM - 11:00 AM | Lec-BBB2222 | Lec-CCC3333 | Lec-CCC3333 | Lec-BBB2222 | Lec-CCC3333
                 5:00 PM - 6:30 PM | Lec-DDD4444 | Free | Free | Lec-DDD4444 | Free
-            """.trimIndent()
-            val localPipeline = SearchIndexPipeline(
-                embeddingIndexer = EmbeddingIndexer(
-                    embeddingGenerator = embeddingGenerator,
-                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                    embeddingRepository = FakeEmbeddingRepository(),
-                    vectorIndex = vectorIndex,
-                    ocrEngine = StubOcrEngine(),
-                ),
-                photoDao = FakePhotoDao(photoRepository),
-                documentDao = FakeDocumentDao(documentRepository),
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                photoImageLoader = PhotoImageLoader { null },
-                documentTextExtractor = FakeDocumentTextExtractor(
-                    mapOf(
-                        "content://docs/weekly_timetable.txt" to toyBody,
-                        "content://docs/timetable_iitd.html" to richBody,
-                    ),
-                ),
-            )
-            val localService = SemanticSearchService(
-                embeddingGenerator = embeddingGenerator,
-                imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                vectorIndex = vectorIndex,
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                documentDao = FakeDocumentDao(documentRepository),
-                searchIndexPipeline = localPipeline,
-                mediaStoreIngestionService = MediaStoreIngestionService(
-                    mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
-                    downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
-                    documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                """.trimIndent()
+            val localPipeline =
+                SearchIndexPipeline(
+                    embeddingIndexer =
+                        EmbeddingIndexer(
+                            embeddingGenerator = embeddingGenerator,
+                            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                            embeddingRepository = FakeEmbeddingRepository(),
+                            vectorIndex = vectorIndex,
+                            ocrEngine = StubOcrEngine(),
+                        ),
                     photoDao = FakePhotoDao(photoRepository),
                     documentDao = FakeDocumentDao(documentRepository),
                     photoRepository = photoRepository,
                     documentRepository = documentRepository,
-                    embeddingIndexer = EmbeddingIndexer(
-                        embeddingGenerator = embeddingGenerator,
-                        imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                        embeddingRepository = FakeEmbeddingRepository(),
-                        vectorIndex = vectorIndex,
-                        ocrEngine = StubOcrEngine(),
-                    ),
-                    searchIndexPipeline = localPipeline,
                     photoImageLoader = PhotoImageLoader { null },
+                    documentTextExtractor =
+                        FakeDocumentTextExtractor(
+                            mapOf(
+                                "content://docs/weekly_timetable.txt" to toyBody,
+                                "content://docs/timetable_iitd.html" to richBody,
+                            ),
+                        ),
+                )
+            val localService =
+                SemanticSearchService(
+                    embeddingGenerator = embeddingGenerator,
+                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                    vectorIndex = vectorIndex,
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    documentDao = FakeDocumentDao(documentRepository),
+                    searchIndexPipeline = localPipeline,
+                    mediaStoreIngestionService =
+                        MediaStoreIngestionService(
+                            mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
+                            downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
+                            documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                            photoDao = FakePhotoDao(photoRepository),
+                            documentDao = FakeDocumentDao(documentRepository),
+                            photoRepository = photoRepository,
+                            documentRepository = documentRepository,
+                            embeddingIndexer =
+                                EmbeddingIndexer(
+                                    embeddingGenerator = embeddingGenerator,
+                                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                                    embeddingRepository = FakeEmbeddingRepository(),
+                                    vectorIndex = vectorIndex,
+                                    ocrEngine = StubOcrEngine(),
+                                ),
+                            searchIndexPipeline = localPipeline,
+                            photoImageLoader = PhotoImageLoader { null },
+                            logger = NoOpRuntimeLogger(),
+                        ),
+                    fullDeviceIndexer = null,
                     logger = NoOpRuntimeLogger(),
-                ),
-                fullDeviceIndexer = null,
-                logger = NoOpRuntimeLogger(),
-            )
+                )
 
             documentRepository.records[toy.id] = toy
             documentRepository.records[rich.id] = rich
             localPipeline.indexDocument(toy)
             localPipeline.indexDocument(rich)
 
-            val page = localService.search(
-                request = SearchRequest(query = "timetable", limit = 5, indexOnQuery = false),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                localService.search(
+                    request = SearchRequest(query = "timetable", limit = 5, indexOnQuery = false),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
             assertTrue(page.count >= 1)
             assertEquals(rich.id, page.items.first().objectId)
             assertEquals("timetable_iitd.html", page.items.first().title)
@@ -699,102 +749,112 @@ class DocumentContentSearchTest {
     @Test
     fun search_contentKeywordsBeatMisleadingFilename() =
         runTest {
-            val misleadingName = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/bookly-name-only",
-                name = "BooklyProspectusReport.pdf",
-                extension = "pdf",
-                mimeType = "application/pdf",
-                size = 100L,
-                checksum = "",
-                createdAt = System.currentTimeMillis(),
-                modifiedAt = System.currentTimeMillis(),
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
-            val contentWinner = DocumentEntity(
-                id = UUID.randomUUID(),
-                path = "content://docs/scan-17",
-                name = "scan-042.pdf",
-                extension = "pdf",
-                mimeType = "application/pdf",
-                size = 100L,
-                checksum = "",
-                createdAt = System.currentTimeMillis(),
-                modifiedAt = System.currentTimeMillis() - 86_400_000,
-                indexedAt = null,
-                projectId = null,
-                embeddingId = null,
-                importance = 0,
-            )
-            val localPipeline = SearchIndexPipeline(
-                embeddingIndexer = EmbeddingIndexer(
-                    embeddingGenerator = embeddingGenerator,
-                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                    embeddingRepository = FakeEmbeddingRepository(),
-                    vectorIndex = vectorIndex,
-                    ocrEngine = StubOcrEngine(),
-                ),
-                photoDao = FakePhotoDao(photoRepository),
-                documentDao = FakeDocumentDao(documentRepository),
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                photoImageLoader = PhotoImageLoader { null },
-                documentTextExtractor = FakeDocumentTextExtractor(
-                    mapOf(
-                        "content://docs/bookly-name-only" to "Generic campus notes without placement data.",
-                        "content://docs/scan-17" to
-                            "BOOKLY PROSPECTUS REPORT detailed placement outcomes for Bookly interns.",
-                    ),
-                ),
-            )
-            val localService = SemanticSearchService(
-                embeddingGenerator = embeddingGenerator,
-                imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                vectorIndex = vectorIndex,
-                photoRepository = photoRepository,
-                documentRepository = documentRepository,
-                documentDao = FakeDocumentDao(documentRepository),
-                searchIndexPipeline = localPipeline,
-                mediaStoreIngestionService = MediaStoreIngestionService(
-                    mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
-                    downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
-                    documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+            val misleadingName =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/bookly-name-only",
+                    name = "BooklyProspectusReport.pdf",
+                    extension = "pdf",
+                    mimeType = "application/pdf",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = System.currentTimeMillis(),
+                    modifiedAt = System.currentTimeMillis(),
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
+            val contentWinner =
+                DocumentEntity(
+                    id = UUID.randomUUID(),
+                    path = "content://docs/scan-17",
+                    name = "scan-042.pdf",
+                    extension = "pdf",
+                    mimeType = "application/pdf",
+                    size = 100L,
+                    checksum = "",
+                    createdAt = System.currentTimeMillis(),
+                    modifiedAt = System.currentTimeMillis() - 86_400_000,
+                    indexedAt = null,
+                    projectId = null,
+                    embeddingId = null,
+                    importance = 0,
+                )
+            val localPipeline =
+                SearchIndexPipeline(
+                    embeddingIndexer =
+                        EmbeddingIndexer(
+                            embeddingGenerator = embeddingGenerator,
+                            imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                            embeddingRepository = FakeEmbeddingRepository(),
+                            vectorIndex = vectorIndex,
+                            ocrEngine = StubOcrEngine(),
+                        ),
                     photoDao = FakePhotoDao(photoRepository),
                     documentDao = FakeDocumentDao(documentRepository),
                     photoRepository = photoRepository,
                     documentRepository = documentRepository,
-                    embeddingIndexer = EmbeddingIndexer(
-                        embeddingGenerator = embeddingGenerator,
-                        imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
-                        embeddingRepository = FakeEmbeddingRepository(),
-                        vectorIndex = vectorIndex,
-                        ocrEngine = StubOcrEngine(),
-                    ),
-                    searchIndexPipeline = localPipeline,
                     photoImageLoader = PhotoImageLoader { null },
+                    documentTextExtractor =
+                        FakeDocumentTextExtractor(
+                            mapOf(
+                                "content://docs/bookly-name-only" to "Generic campus notes without placement data.",
+                                "content://docs/scan-17" to
+                                    "BOOKLY PROSPECTUS REPORT detailed placement outcomes for Bookly interns.",
+                            ),
+                        ),
+                )
+            val localService =
+                SemanticSearchService(
+                    embeddingGenerator = embeddingGenerator,
+                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                    vectorIndex = vectorIndex,
+                    photoRepository = photoRepository,
+                    documentRepository = documentRepository,
+                    documentDao = FakeDocumentDao(documentRepository),
+                    searchIndexPipeline = localPipeline,
+                    mediaStoreIngestionService =
+                        MediaStoreIngestionService(
+                            mediaStoreQuery = com.nova.runtime.storage.search.NoOpMediaStoreQueryPort(),
+                            downloadsQuery = com.nova.runtime.storage.search.NoOpDownloadsQueryPort(),
+                            documentsQuery = com.nova.runtime.storage.search.NoOpDocumentsQueryPort(),
+                            photoDao = FakePhotoDao(photoRepository),
+                            documentDao = FakeDocumentDao(documentRepository),
+                            photoRepository = photoRepository,
+                            documentRepository = documentRepository,
+                            embeddingIndexer =
+                                EmbeddingIndexer(
+                                    embeddingGenerator = embeddingGenerator,
+                                    imageEmbeddingGenerator = HashImageEmbeddingGenerator(dimension = 32),
+                                    embeddingRepository = FakeEmbeddingRepository(),
+                                    vectorIndex = vectorIndex,
+                                    ocrEngine = StubOcrEngine(),
+                                ),
+                            searchIndexPipeline = localPipeline,
+                            photoImageLoader = PhotoImageLoader { null },
+                            logger = NoOpRuntimeLogger(),
+                        ),
+                    fullDeviceIndexer = null,
                     logger = NoOpRuntimeLogger(),
-                ),
-                fullDeviceIndexer = null,
-                logger = NoOpRuntimeLogger(),
-            )
+                )
 
             documentRepository.records[misleadingName.id] = misleadingName
             documentRepository.records[contentWinner.id] = contentWinner
             localPipeline.indexDocument(misleadingName)
             localPipeline.indexDocument(contentWinner)
 
-            val page = localService.search(
-                request = SearchRequest(
-                    query = "bookly prospectus placement",
-                    limit = 5,
-                    indexOnQuery = false,
-                ),
-                traceId = UUID.randomUUID(),
-                objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
-            )
+            val page =
+                localService.search(
+                    request =
+                        SearchRequest(
+                            query = "bookly prospectus placement",
+                            limit = 5,
+                            indexOnQuery = false,
+                        ),
+                    traceId = UUID.randomUUID(),
+                    objectTypes = setOf(SemanticSearchService.OBJECT_TYPE_DOCUMENT),
+                )
 
             assertTrue(page.count >= 1)
             assertEquals(contentWinner.id, page.items.first().objectId)
@@ -863,47 +923,84 @@ class DocumentContentSearchTest {
         private val delegate: EmbeddingGenerator,
     ) : EmbeddingGenerator {
         var lastEmbeddedText: String? = null
+        val embeddedTexts = mutableListOf<String>()
         override val dimension: Int get() = delegate.dimension
         override val modelVersion: String get() = delegate.modelVersion
         override val isLoaded: Boolean get() = delegate.isLoaded
 
         override suspend fun embed(text: String): EmbeddingResult {
             lastEmbeddedText = text
+            embeddedTexts += text
             return delegate.embed(text)
         }
     }
 
     private class StubOcrEngine : OcrEngine {
-        override suspend fun recognize(imageBytes: ByteArray): OcrResult =
-            OcrResult.Failure("unused")
+        override suspend fun recognize(imageBytes: ByteArray): OcrResult = OcrResult.Failure("unused")
     }
 
     private class FakePhotoRepository : PhotoRepository {
         val records = mutableMapOf<UUID, PhotoEntity>()
-        override suspend fun insert(photo: PhotoEntity) { records[photo.id] = photo }
-        override suspend fun update(photo: PhotoEntity) { records[photo.id] = photo }
-        override suspend fun delete(id: UUID) { records.remove(id) }
+
+        override suspend fun insert(photo: PhotoEntity) {
+            records[photo.id] = photo
+        }
+
+        override suspend fun update(photo: PhotoEntity) {
+            records[photo.id] = photo
+        }
+
+        override suspend fun delete(id: UUID) {
+            records.remove(id)
+        }
+
         override suspend fun getById(id: UUID): PhotoEntity? = records[id]
+
         override fun observeById(id: UUID): Flow<PhotoEntity?> = emptyFlow()
+
         override suspend fun search(query: String): List<PhotoEntity> = emptyList()
     }
 
     private class FakeDocumentRepository : DocumentRepository {
         val records = mutableMapOf<UUID, DocumentEntity>()
-        override suspend fun insert(document: DocumentEntity) { records[document.id] = document }
-        override suspend fun update(document: DocumentEntity) { records[document.id] = document }
-        override suspend fun delete(id: UUID) { records.remove(id) }
+
+        override suspend fun insert(document: DocumentEntity) {
+            records[document.id] = document
+        }
+
+        override suspend fun update(document: DocumentEntity) {
+            records[document.id] = document
+        }
+
+        override suspend fun delete(id: UUID) {
+            records.remove(id)
+        }
+
         override suspend fun getById(id: UUID): DocumentEntity? = records[id]
+
         override fun observeById(id: UUID): Flow<DocumentEntity?> = emptyFlow()
+
         override suspend fun search(query: String): List<DocumentEntity> = emptyList()
     }
 
     private class FakeEmbeddingRepository : EmbeddingRepository {
         override suspend fun insert(embedding: EmbeddingEntity) = Unit
+
         override suspend fun update(embedding: EmbeddingEntity) = Unit
+
         override suspend fun delete(embeddingId: UUID) = Unit
+
         override suspend fun getById(embeddingId: UUID) = null
+
         override fun observeById(embeddingId: UUID): Flow<EmbeddingEntity?> = emptyFlow()
+
+        override suspend fun listPersistedVectorsPage(
+            afterId: UUID?,
+            limit: Int,
+        ): List<com.nova.runtime.storage.entities.EmbeddingEntity> =
+            listWithPersistedVectors().filter { afterId == null || it.embeddingId.toString() > afterId.toString() }
+                .sortedBy { it.embeddingId.toString() }.take(limit)
+
         override suspend fun listWithPersistedVectors(): List<EmbeddingEntity> = emptyList()
     }
 
@@ -911,43 +1008,72 @@ class DocumentContentSearchTest {
         private val repository: FakePhotoRepository,
     ) : PhotoDao {
         override suspend fun insert(photo: PhotoEntity) = repository.insert(photo)
+
         override suspend fun update(photo: PhotoEntity) = repository.update(photo)
+
         override suspend fun delete(photo: PhotoEntity) = repository.delete(photo.id)
+
         override suspend fun getById(id: UUID) = repository.getById(id)
+
         override fun observeById(id: UUID) = repository.observeById(id)
+
+        override suspend fun getExistingUris(uris: List<String>): List<String> = uris.filter { getByUri(it) != null }
+
         override suspend fun getByUri(uri: String) = repository.records.values.firstOrNull { it.uri == uri }
+
         override suspend fun searchByOcr(query: String) = emptyList<PhotoEntity>()
-        override suspend fun searchByOcrPaged(query: String, limit: Int, offset: Int) = emptyList<PhotoEntity>()
+
+        override suspend fun searchByOcrPaged(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ) = emptyList<PhotoEntity>()
+
         override suspend fun countByOcr(query: String) = 0
+
         override suspend fun listRecent(limit: Int) = repository.records.values.take(limit)
+
         override suspend fun listUnindexedWithOcr(limit: Int) =
             repository.records.values.filter { it.embeddingId == null && !it.ocrText.isNullOrBlank() }.take(limit)
-        override suspend fun listUnindexed(limit: Int) =
-            repository.records.values.filter { it.embeddingId == null }.take(limit)
+
+        override suspend fun listUnindexed(limit: Int) = repository.records.values.filter { it.embeddingId == null }.take(limit)
     }
 
     private class FakeDocumentDao(
         private val repository: FakeDocumentRepository,
     ) : DocumentDao {
         override suspend fun insert(document: DocumentEntity) = repository.insert(document)
+
         override suspend fun update(document: DocumentEntity) = repository.update(document)
+
         override suspend fun delete(document: DocumentEntity) = repository.delete(document.id)
+
         override suspend fun getById(id: UUID) = repository.getById(id)
+
         override fun observeById(id: UUID) = repository.observeById(id)
+
+        override suspend fun getExistingPaths(paths: List<String>): List<String> = paths.filter { getByPath(it) != null }
+
         override suspend fun getByPath(path: String) = repository.records.values.firstOrNull { it.path == path }
+
         override suspend fun searchByName(query: String) = emptyList<DocumentEntity>()
-        override suspend fun searchFullText(query: String, limit: Int, offset: Int) =
-            repository.records.values
-                .filter {
-                    it.name.contains(query, ignoreCase = true) ||
-                        it.path.contains(query, ignoreCase = true) ||
-                        it.extension.contains(query, ignoreCase = true) ||
-                        it.summary.orEmpty().contains(query, ignoreCase = true) ||
-                        it.contentText.orEmpty().contains(query, ignoreCase = true)
-                }
-                .sortedByDescending { it.modifiedAt }
-                .drop(offset)
-                .take(limit)
+
+        override suspend fun searchFullText(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ) = repository.records.values
+            .filter {
+                it.name.contains(query, ignoreCase = true) ||
+                    it.path.contains(query, ignoreCase = true) ||
+                    it.extension.contains(query, ignoreCase = true) ||
+                    it.summary.orEmpty().contains(query, ignoreCase = true) ||
+                    it.contentText.orEmpty().contains(query, ignoreCase = true)
+            }
+            .sortedByDescending { it.modifiedAt }
+            .drop(offset)
+            .take(limit)
+
         override suspend fun countFullText(query: String) =
             repository.records.values.count {
                 it.name.contains(query, ignoreCase = true) ||
@@ -956,20 +1082,37 @@ class DocumentContentSearchTest {
                     it.summary.orEmpty().contains(query, ignoreCase = true) ||
                     it.contentText.orEmpty().contains(query, ignoreCase = true)
             }
+
         override suspend fun getByProjectId(projectId: UUID) = emptyList<DocumentEntity>()
-        override suspend fun listUnindexed(limit: Int) =
-            repository.records.values.filter { it.embeddingId == null }.take(limit)
+
+        override suspend fun listUnindexed(limit: Int) = repository.records.values.filter { it.embeddingId == null }.take(limit)
+
         override suspend fun listMissingContentText(limit: Int) =
             repository.records.values.filter {
                 ContentExtractStatus.needsBackgroundExtraction(it.contentExtractStatus) &&
                     it.contentText.isNullOrBlank()
             }.take(limit)
-        override suspend fun listMissingSummary(limit: Int) =
-            repository.records.values.filter { it.summary == null }.take(limit)
+
+        override suspend fun listMissingSummary(limit: Int) = repository.records.values.filter { it.summary == null }.take(limit)
+
+        override fun observeAll(): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
+            kotlinx.coroutines.flow.flowOf(
+                repository.records.values.toList(),
+            )
+
+        override fun observeCount(): kotlinx.coroutines.flow.Flow<Int> = kotlinx.coroutines.flow.flowOf(repository.records.size)
+
+        override fun observeIndexedCount(): kotlinx.coroutines.flow.Flow<Int> =
+            kotlinx.coroutines.flow.flowOf(
+                repository.records.values.count {
+                    it.embeddingId != null
+                },
+            )
+
         override suspend fun countAll() = repository.records.size
-        override suspend fun countWithSummary() =
-            repository.records.values.count { !it.summary.isNullOrBlank() }
-        override suspend fun countMissingSummary() =
-            repository.records.values.count { it.summary.isNullOrBlank() }
+
+        override suspend fun countWithSummary() = repository.records.values.count { !it.summary.isNullOrBlank() }
+
+        override suspend fun countMissingSummary() = repository.records.values.count { it.summary.isNullOrBlank() }
     }
 }

@@ -1,16 +1,30 @@
 package com.nova.runtime.app.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nova.runtime.ai.model.LocalLlmEngine
 import com.nova.runtime.ai.model.ModelAssetPaths
+import com.nova.runtime.ai.model.ModelAvailability
 import com.nova.runtime.ai.model.ModelDownloadManager
 import com.nova.runtime.ai.model.ModelDownloadPhase
 import com.nova.runtime.ai.model.ModelDownloadSessionState
 import com.nova.runtime.ai.model.ModelFilePhase
 import com.nova.runtime.ai.model.ModelLoader
+import com.nova.runtime.ai.native.search.SearchIndexPipeline
+import com.nova.runtime.ai.native.storage.CosineVectorIndex
+import com.nova.runtime.android.accessibilityAdapter.AccessibilityServiceBridge
 import com.nova.runtime.app.ui.components.ActivityItem
 import com.nova.runtime.app.ui.components.ContentDetailState
+import com.nova.runtime.app.ui.models.AutomationTaskItem
+import com.nova.runtime.app.ui.models.CommandLogEntry
 import com.nova.runtime.app.ui.models.LiveTelemetryState
+import com.nova.runtime.app.ui.models.RuntimeModelSpec
+import com.nova.runtime.app.ui.models.RuntimeTelemetrySampler
+import com.nova.runtime.app.ui.models.VectorPoint2D
 import com.nova.runtime.conversation.speech.SpeechRecognizer
 import com.nova.runtime.events.EventBus
 import com.nova.runtime.events.RuntimeEvent
@@ -27,40 +41,43 @@ import com.nova.runtime.models.RuntimeModule
 import com.nova.runtime.orchestrator.CognitivePipelineOrchestrator
 import com.nova.runtime.orchestrator.PipelineResult
 import com.nova.runtime.orchestrator.PipelineStage
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.UUID
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import android.content.Context
-import android.net.Uri
-import com.nova.runtime.android.accessibilityAdapter.AccessibilityServiceBridge
-import com.nova.runtime.app.ui.models.AutomationTaskItem
-import com.nova.runtime.app.ui.models.CommandLogEntry
-import com.nova.runtime.app.ui.models.RuntimeModelSpec
-import com.nova.runtime.app.ui.models.VectorPoint2D
+import com.nova.runtime.storage.dao.DocumentLibraryDao
+import com.nova.runtime.storage.dao.DocumentLibraryEntry
 import com.nova.runtime.storage.dao.DocumentDao
 import com.nova.runtime.storage.dao.EmbeddingDao
 import com.nova.runtime.storage.dao.PreferenceDao
 import com.nova.runtime.storage.entities.DocumentEntity
-import com.nova.runtime.storage.entities.EmbeddingEntity
 import com.nova.runtime.storage.entities.PreferenceEntity
+import com.nova.runtime.storage.repository.DocumentRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
+import java.time.Instant
+import java.io.File
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.UUID
 
 class NovaOsViewModel(
     private val orchestrator: CognitivePipelineOrchestrator,
@@ -70,8 +87,6 @@ class NovaOsViewModel(
     private val modelDownloadManager: ModelDownloadManager,
     private val lifecycleManager: LifecycleManager,
 ) : ViewModel(), KoinComponent {
-
-
     private val _lifecycleState = MutableStateFlow(RuntimeLifecycleState.CREATED)
     val lifecycleState: StateFlow<RuntimeLifecycleState> = _lifecycleState.asStateFlow()
 
@@ -101,9 +116,6 @@ class NovaOsViewModel(
     private val _contentDetail = MutableStateFlow<ContentDetailState?>(null)
     val contentDetail: StateFlow<ContentDetailState?> = _contentDetail.asStateFlow()
 
-    private val _telemetryState = MutableStateFlow(LiveTelemetryState())
-    val telemetryState: StateFlow<LiveTelemetryState> = _telemetryState.asStateFlow()
-
     private val _selectedTab = MutableStateFlow(com.nova.runtime.app.ui.components.NovaScreenTab.DASHBOARD)
     val selectedTab: StateFlow<com.nova.runtime.app.ui.components.NovaScreenTab> = _selectedTab.asStateFlow()
 
@@ -113,7 +125,12 @@ class NovaOsViewModel(
 
     // --- OBJECTIVE MODERNIST LIVE DATA FLOWS & ACTIONS ---
     private val documentDao: DocumentDao by inject()
+    private val documentLibraryDao: DocumentLibraryDao by inject()
     private val embeddingDao: EmbeddingDao by inject()
+    private val vectorIndex: CosineVectorIndex by inject()
+    private val documentRepository: DocumentRepository by inject()
+    private val searchIndexPipeline: SearchIndexPipeline by inject()
+    private val localLlmEngine: LocalLlmEngine by inject()
     private val preferenceDao: PreferenceDao by inject()
     private val accessibilityBridge: AccessibilityServiceBridge by inject()
 
@@ -158,84 +175,181 @@ class NovaOsViewModel(
     }
 
     // 2. RAG Index Document & Embedding Room Flows
-    val totalDocumentsCount: StateFlow<Int> = documentDao.observeCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val totalDocumentsCount: StateFlow<Int> =
+        documentDao.observeCount()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val totalEmbeddingsCount: StateFlow<Int> = embeddingDao.observeCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val totalEmbeddingsCount: StateFlow<Int> =
+        embeddingDao.observeCount()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val indexedDocumentsList: StateFlow<List<DocumentEntity>> = documentDao.observeAll()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val documentLibraryLimit = MutableStateFlow(100)
 
-    private val _retrievalLatencyMs = MutableStateFlow(12)
-    val retrievalLatencyMs: StateFlow<Int> = _retrievalLatencyMs.asStateFlow()
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val indexedDocumentsList: StateFlow<List<DocumentLibraryEntry>> =
+        documentLibraryLimit.flatMapLatest { documentLibraryDao.observeRecent(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _vectorSpacePoints = MutableStateFlow<List<VectorPoint2D>>(
-        listOf(
-            VectorPoint2D(0.30f, 0.20f, isPrimary = true),
-            VectorPoint2D(0.32f, 0.25f),
-            VectorPoint2D(0.70f, 0.60f),
-            VectorPoint2D(0.68f, 0.65f, isPrimary = true),
-            VectorPoint2D(0.50f, 0.40f, label = "Cluster_Alpha"),
-            VectorPoint2D(0.20f, 0.80f),
-        ),
-    )
-    val vectorSpacePoints: StateFlow<List<VectorPoint2D>> = _vectorSpacePoints.asStateFlow()
+    val dailyDocuments: StateFlow<List<DocumentLibraryEntry>> =
+        documentLibraryDao.observeDaily(100)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun ingestDocumentFromUri(context: Context, uri: Uri) {
+    fun setDailyDocument(id: UUID, saved: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
+            val key = "daily_document_$id"
+            if (saved) preferenceDao.insert(PreferenceEntity(key, "true", 1.0f, System.currentTimeMillis()))
+            else preferenceDao.getByKey(key)?.let { preferenceDao.delete(it) }
+        }
+    }
+
+    fun loadMoreDocuments() {
+        documentLibraryLimit.update { (it.toLong() + 100).coerceAtMost(Int.MAX_VALUE.toLong()).toInt() }
+    }
+
+    private val _isImportingDocument = MutableStateFlow(false)
+    val isImportingDocument = _isImportingDocument.asStateFlow()
+    private val _documentLibraryMessage = MutableStateFlow<String?>(null)
+    val documentLibraryMessage = _documentLibraryMessage.asStateFlow()
+    private var documentDetailJob: Job? = null
+
+    fun openLibraryDocument(id: UUID, onOpen: (ContentDetailState) -> Unit) {
+        documentDetailJob?.cancel()
+        documentDetailJob = viewModelScope.launch {
             try {
-                val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "document_${System.currentTimeMillis()}.txt"
-                val inputStream = context.contentResolver.openInputStream(uri)
-                val text = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
-                val docId = UUID.randomUUID()
-                val embeddingId = UUID.randomUUID()
-
-                val entity = DocumentEntity(
-                    id = docId,
-                    path = uri.toString(),
-                    name = fileName,
-                    extension = fileName.substringAfterLast('.', "txt"),
-                    mimeType = context.contentResolver.getType(uri) ?: "text/plain",
-                    size = text.length.toLong(),
-                    checksum = text.hashCode().toString(),
-                    createdAt = System.currentTimeMillis(),
-                    modifiedAt = System.currentTimeMillis(),
-                    indexedAt = System.currentTimeMillis(),
-                    projectId = UUID.fromString("00000000-0000-0000-0000-000000000001"),
-                    embeddingId = embeddingId,
-                    importance = 1,
-                    contentText = text,
-                    contentExtractStatus = "INDEXED",
-                    summary = text.take(200),
-                )
-                documentDao.insert(entity)
-
-                val sampleFloatArray = FloatArray(384) { (it % 10) * 0.1f }
-                val buffer = java.nio.ByteBuffer.allocate(sampleFloatArray.size * 4)
-                sampleFloatArray.forEach { buffer.putFloat(it) }
-
-                val embedding = EmbeddingEntity(
-                    embeddingId = embeddingId,
-                    objectType = "DOCUMENT",
-                    objectId = docId,
-                    modelVersion = "all-MiniLM-L6-v2",
-                    dimension = 384,
-                    createdAt = System.currentTimeMillis(),
-                    vectorBlob = buffer.array(),
-                    embeddingKind = "document",
-                )
-                embeddingDao.insert(embedding)
-
-                prependActivity(
-                    ActivityItem(
-                        timestamp = now(),
-                        source = "STORAGE",
-                        message = "Ingested $fileName (${text.length} chars, 384-dim vector)",
-                        isAlert = true,
+                val document = withContext(Dispatchers.IO) { documentDao.getById(id) }
+                if (document == null) {
+                    _documentLibraryMessage.value = "This document is no longer in the library."
+                    return@launch
+                }
+                onOpen(
+                    ContentDetailState(
+                        fileName = document.name,
+                        text = document.contentText ?: document.summary ?: "No extracted text yet.",
+                        modifiedAtMillis = document.modifiedAt,
                     ),
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                _documentLibraryMessage.value = "Could not open document: ${e.message}"
+            }
+        }
+    }
+
+    fun removeLibraryDocument(id: UUID) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                documentRepository.delete(id)
+                _documentLibraryMessage.value = "Removed from the library. The original file is unchanged."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _documentLibraryMessage.value = "Could not remove document: ${e.message}"
+            }
+        }
+    }
+
+    private data class CommandMeasurements(val completed: Int = 0, val lastLatencyMs: Long? = null)
+
+    private val commandMeasurements = MutableStateFlow(CommandMeasurements())
+    private val telemetrySampler = RuntimeTelemetrySampler()
+    val telemetryState: StateFlow<LiveTelemetryState> =
+        combine(
+            embeddingDao.observePersistedVectorCount(),
+            documentDao.observeIndexedCount(),
+            commandMeasurements,
+            vectorIndex.searchStats,
+            flow {
+                while (currentCoroutineContext().isActive) {
+                    emit(telemetrySampler.sample())
+                    delay(5000)
+                }
+            },
+        ) { embeddings, documents, commands, search, heap ->
+            LiveTelemetryState(
+                memoryUsagePercent = heap.memoryUsagePercent,
+                indexedVectorCount = embeddings,
+                totalDocumentsIndexed = documents,
+                ragLatencyMs = search.lastDurationNanos?.div(1_000_000.0),
+                totalTasksExecuted = commands.completed,
+                lastCommandLatencyMs = commands.lastLatencyMs,
+                sessionUptimeSeconds = heap.sessionUptimeSeconds,
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LiveTelemetryState())
+
+    val retrievalLatencyMs =
+        vectorIndex.searchStats
+            .map { stats -> stats.lastDurationNanos?.div(1_000_000.0) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    private val _vectorSpacePoints = MutableStateFlow<List<VectorPoint2D>>(emptyList())
+    val vectorSpacePoints: StateFlow<List<VectorPoint2D>> = _vectorSpacePoints.asStateFlow()
+
+    fun ingestDocumentFromUri(
+        context: Context,
+        uri: Uri,
+        dailyEssential: Boolean = false,
+    ) {
+        viewModelScope.launch {
+            if (_isImportingDocument.value) return@launch
+            _isImportingDocument.value = true
+            _documentLibraryMessage.value = "Importing document…"
+            try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    var fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "document"
+                    var sizeBytes = 0L
+                    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use {
+                            cursor ->
+                        if (cursor.moveToFirst()) {
+                            val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (nameColumn >= 0 && !cursor.isNull(nameColumn)) fileName = cursor.getString(nameColumn)
+                            val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) sizeBytes = cursor.getLong(sizeColumn).coerceAtLeast(0L)
+                        }
+                    }
+                    val existing = documentDao.getByPath(uri.toString())
+                    val timestamp = System.currentTimeMillis()
+                    val entity =
+                        existing?.copy(name = fileName, size = sizeBytes, modifiedAt = timestamp) ?: DocumentEntity(
+                            id = UUID.nameUUIDFromBytes(uri.toString().toByteArray(Charsets.UTF_8)),
+                            path = uri.toString(),
+                            name = fileName,
+                            extension = fileName.substringAfterLast('.', "").lowercase(),
+                            mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream",
+                            size = sizeBytes,
+                            checksum = "",
+                            createdAt = timestamp,
+                            modifiedAt = timestamp,
+                            indexedAt = null,
+                            projectId = null,
+                            embeddingId = null,
+                            importance = 1,
+                        )
+                    if (existing == null) documentRepository.insert(entity) else documentRepository.update(entity)
+                    if (dailyEssential) {
+                        preferenceDao.insert(PreferenceEntity("daily_document_${entity.id}", "true", 1.0f, timestamp))
+                    }
+                    // Reuse bounded extraction, real embeddings, and live vector-index updates.
+                    searchIndexPipeline.indexDocument(entity, forceExtract = true)
+                    val embeddingId = documentDao.getById(entity.id)?.embeddingId
+                    val indexed = embeddingId != null && embeddingDao.getById(embeddingId)?.vectorBlob != null
+                    _documentLibraryMessage.value =
+                        if (indexed) "Imported $fileName" else "Added $fileName. Search indexing is pending."
+
+                    prependActivity(
+                        ActivityItem(
+                            timestamp = now(),
+                            source = "STORAGE",
+                            message = if (indexed) "Indexed $fileName" else "Added $fileName; embedding is pending model availability.",
+                            isAlert = true,
+                        ),
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _documentLibraryMessage.value = "Import failed: ${e.message}"
                 prependActivity(
                     ActivityItem(
                         timestamp = now(),
@@ -244,6 +358,8 @@ class NovaOsViewModel(
                         isAlert = true,
                     ),
                 )
+            } finally {
+                _isImportingDocument.value = false
             }
         }
     }
@@ -268,26 +384,21 @@ class NovaOsViewModel(
     private val _accessibilityTreeNodes = MutableStateFlow<List<String>>(emptyList())
     val accessibilityTreeNodes: StateFlow<List<String>> = _accessibilityTreeNodes.asStateFlow()
 
-    private val _automationQueueTasks = MutableStateFlow<List<AutomationTaskItem>>(
-        listOf(
-            AutomationTaskItem("1", "01", "Sort emails by content", "RUNNING", 85),
-            AutomationTaskItem("2", "02", "Draft reply to manager", "PENDING", 0),
-            AutomationTaskItem("3", "03", "Compile weekly report", "DONE", 100),
-        ),
-    )
+    private val _automationQueueTasks = MutableStateFlow<List<AutomationTaskItem>>(emptyList())
     val automationQueueTasks: StateFlow<List<AutomationTaskItem>> = _automationQueueTasks.asStateFlow()
 
     fun enqueueNewTask(title: String) {
         if (title.isBlank()) return
         val taskId = UUID.randomUUID().toString().take(6).uppercase()
         val nextIndex = String.format("%02d", _automationQueueTasks.value.size + 1)
-        val newItem = AutomationTaskItem(
-            id = taskId,
-            indexLabel = nextIndex,
-            title = title,
-            status = "PENDING",
-            progressPercent = 0,
-        )
+        val newItem =
+            AutomationTaskItem(
+                id = taskId,
+                indexLabel = nextIndex,
+                title = title,
+                status = "PENDING",
+                progressPercent = 0,
+            )
         _automationQueueTasks.update { listOf(newItem) + it }
         prependActivity(
             ActivityItem(
@@ -300,61 +411,26 @@ class NovaOsViewModel(
     }
 
     // 4. Command Log Terminal History
-    private val _commandHistory = MutableStateFlow<List<CommandLogEntry>>(
-        listOf(
-            CommandLogEntry(
-                indexLabel = "01",
-                timestamp = "14:22:05 UTC",
-                latencyMs = 12,
-                status = "RESOLVED",
-                commandText = "Analyze recent anomaly patterns in core processing matrix",
-                responseText = "Anomaly detection complete. Significant variance identified in Sector 7-G. Recommend immediate recalibration of primary containment parameters.",
-                tags = listOf("Sector 7-G", "Recalibration Required"),
-            ),
-            CommandLogEntry(
-                indexLabel = "02",
-                timestamp = "14:25:12 UTC",
-                latencyMs = 45,
-                status = "RESOLVED",
-                commandText = "Initiate recalibration protocol Alpha-1",
-                responseText = "Protocol Alpha-1 engaged. Containment parameters updated. Monitoring variance levels... Nominal.",
-                tags = listOf("Alpha-1", "Nominal"),
-            ),
-        ),
-    )
+    private val _commandHistory = MutableStateFlow<List<CommandLogEntry>>(emptyList())
     val commandHistory: StateFlow<List<CommandLogEntry>> = _commandHistory.asStateFlow()
 
     // 5. Config / Settings
     private val _temperatureSetting = MutableStateFlow(0.7f)
     val temperatureSetting: StateFlow<Float> = _temperatureSetting.asStateFlow()
 
-    private val _contextWindowSetting = MutableStateFlow(32768)
+    private val _contextWindowSetting = MutableStateFlow(0)
     val contextWindowSetting: StateFlow<Int> = _contextWindowSetting.asStateFlow()
 
     private val _quantizationSetting = MutableStateFlow(true)
     val quantizationSetting: StateFlow<Boolean> = _quantizationSetting.asStateFlow()
 
-    private val _runtimeModelsList = MutableStateFlow(
-        listOf(
-            RuntimeModelSpec("01", "Reasoning Core", "SmolLM2-1.7B", "LOADED", "psychology"),
-            RuntimeModelSpec("02", "Vision Core", "MobileCLIP-ViT", "AVAILABLE", "visibility"),
-            RuntimeModelSpec("03", "ASR Core", "Whisper-Tiny-ONNX", "LOADED", "mic"),
-            RuntimeModelSpec("04", "Embedding Core", "MiniLM-L6-v2", "LOADED", "database"),
-        ),
-    )
+    private val _runtimeModelsList = MutableStateFlow<List<RuntimeModelSpec>>(emptyList())
     val runtimeModelsList: StateFlow<List<RuntimeModelSpec>> = _runtimeModelsList.asStateFlow()
 
     fun updateTemperature(value: Float) {
         _temperatureSetting.value = value
         viewModelScope.launch(Dispatchers.IO) {
             preferenceDao.insert(PreferenceEntity("model_temperature", value.toString(), 1.0f, System.currentTimeMillis()))
-        }
-    }
-
-    fun updateContextWindow(value: Int) {
-        _contextWindowSetting.value = value
-        viewModelScope.launch(Dispatchers.IO) {
-            preferenceDao.insert(PreferenceEntity("model_context_window", value.toString(), 1.0f, System.currentTimeMillis()))
         }
     }
 
@@ -372,8 +448,9 @@ class NovaOsViewModel(
     private var clearIndexingStatusJob: Job? = null
     private var lastIndexingProgressSignature: String? = null
 
-    private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-        .withZone(ZoneId.systemDefault())
+    private val timeFormatter =
+        DateTimeFormatter.ofPattern("HH:mm:ss")
+            .withZone(ZoneId.systemDefault())
 
     private val commandMutex = Mutex()
 
@@ -381,52 +458,12 @@ class NovaOsViewModel(
         _lifecycleState.value = lifecycleManager.state.value
         subscribeToRuntimeEvents()
         seedBootEvents()
-        startLiveTelemetryTicker()
         viewModelScope.launch {
             replayMissedRuntimeEvents()
             observeModelDownloads()
             withContext(Dispatchers.IO) {
                 reportModelAvailability()
                 modelDownloadManager.ensureAllModels()
-            }
-        }
-    }
-
-    private fun startLiveTelemetryTicker() {
-        viewModelScope.launch(Dispatchers.Default) {
-            val startTime = System.currentTimeMillis()
-            var taskCounter = 12
-            while (true) {
-                val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000
-                val runtime = Runtime.getRuntime()
-                val usedMem = (runtime.totalMemory() - runtime.freeMemory()).toFloat()
-                val maxMem = runtime.maxMemory().toFloat().coerceAtLeast(1f)
-                val realMemPercent = ((usedMem / maxMem) * 100).toInt().coerceIn(8, 95)
-
-                val pulse = (elapsedSeconds % 10).toInt()
-                val liveTeraOps = 1.78f + (pulse * 0.015f)
-                val liveTemp = 40 + (pulse % 3)
-                val liveThroughput = 410 + (pulse * 3)
-                val liveVectors = 12400 + (elapsedSeconds.toInt() % 150)
-                val liveDocs = 42 + (elapsedSeconds.toInt() % 5)
-                val liveLatency = 13 + (pulse % 3)
-                val liveNodeLatency = 1.3f + ((pulse % 4) * 0.05f)
-
-                _telemetryState.value = LiveTelemetryState(
-                    memoryUsagePercent = realMemPercent,
-                    npuTeraOpsCurrent = liveTeraOps,
-                    npuTeraOpsPeak = 1.90f,
-                    npuTempCelsius = liveTemp,
-                    indexedVectorCount = liveVectors,
-                    totalDocumentsIndexed = liveDocs,
-                    ragLatencyMs = liveLatency,
-                    ragThroughputDocsPerSec = liveThroughput,
-                    nodeLatencyMs = liveNodeLatency,
-                    sessionUptimeSeconds = elapsedSeconds,
-                    totalTasksExecuted = taskCounter,
-                    activeQueueProgress = 0.92f,
-                )
-                delay(1000)
             }
         }
     }
@@ -451,6 +488,10 @@ class NovaOsViewModel(
             modelDownloadManager.state.collectLatest { session ->
                 syncReadinessFromSession(session)
                 logDownloadSession(session)
+                val contextTokens = withContext(Dispatchers.IO) { localLlmEngine.contextWindowTokens }
+                if (_contextWindowSetting.value != contextTokens) {
+                    withContext(Dispatchers.IO) { reportModelAvailability() }
+                }
             }
         }
     }
@@ -459,14 +500,15 @@ class NovaOsViewModel(
         _whisperAvailable.value = session.readiness.prefersLocalWhisper
         _modelsReadyForHeavyInference.value = session.readiness.canRunHeavyInference
 
-        _voiceStatusMessage.value = when {
-            session.readiness.prefersLocalWhisper -> null
-            session.phase == ModelDownloadPhase.DOWNLOADING &&
-                session.files.any { it.fileName == ModelAssetPaths.WHISPER_MODEL && it.phase == ModelFilePhase.DOWNLOADING } ->
-                "Downloading whisper-tiny.onnx for offline voice…"
-            else ->
-                "Whisper ONNX not installed — MIC uses device speech recognition (explicit fallback)."
-        }
+        _voiceStatusMessage.value =
+            when {
+                session.readiness.prefersLocalWhisper -> null
+                session.phase == ModelDownloadPhase.DOWNLOADING &&
+                    session.files.any { it.fileName == ModelAssetPaths.WHISPER_MODEL && it.phase == ModelFilePhase.DOWNLOADING } ->
+                    "Downloading whisper-tiny.onnx for offline voice…"
+                else ->
+                    "Whisper ONNX not installed — MIC uses device speech recognition (explicit fallback)."
+            }
     }
 
     private fun logDownloadSession(session: ModelDownloadSessionState) {
@@ -497,7 +539,7 @@ class NovaOsViewModel(
                         ActivityItem(
                             timestamp = now(),
                             source = "MODELS",
-                            message = "${file.fileName} ready (${sizeMb} MB)",
+                            message = "${file.fileName} ready ($sizeMb MB)",
                             isAlert = true,
                         ),
                     )
@@ -520,7 +562,37 @@ class NovaOsViewModel(
     }
 
     private suspend fun reportModelAvailability() {
-        val report = modelLoader.availabilityReport()
+        _contextWindowSetting.value = localLlmEngine.contextWindowTokens
+        val report = modelLoader.availabilityReport().toMutableList()
+        for (name in listOf(ModelAssetPaths.GEMMA_TASK_MODEL, ModelAssetPaths.GEMMA_LEGACY_TASK_MODEL)) {
+            val path = modelLoader.resolvePath(name)
+            if (name == ModelAssetPaths.GEMMA_TASK_MODEL || path != null) {
+                val file = path?.let { File(it) }
+                report += ModelAvailability(
+                    fileName = name,
+                    path = path.orEmpty(),
+                    available = file?.isFile == true && file.length() >= ModelAssetPaths.GEMMA_TASK_MIN_BYTES,
+                    sizeBytes = file?.length() ?: 0L,
+                )
+            }
+        }
+        _runtimeModelsList.value =
+            report.mapIndexed { index, model ->
+                RuntimeModelSpec(
+                    indexLabel = (index + 1).toString(),
+                    name = model.fileName,
+                    version = "${model.sizeBytes / (1024 * 1024)} MB on disk",
+                    status =
+                        if (model.available) {
+                            "AVAILABLE"
+                        } else if (model.sizeBytes > 0) {
+                            "ERROR"
+                        } else {
+                            "MISSING"
+                        },
+                    iconName = "database",
+                )
+            }
         report.forEach { model ->
             val sizeMb = model.sizeBytes / (1024 * 1024)
             val corrupt = model.sizeBytes > 0L && !model.available
@@ -536,16 +608,17 @@ class NovaOsViewModel(
                 ActivityItem(
                     timestamp = now(),
                     source = "MODELS",
-                    message = when {
-                        model.available ->
-                            "${model.fileName} available (${sizeMb} MB)"
-                        corrupt ->
-                            "${model.fileName} corrupt (${model.sizeBytes} bytes) — re-downloading"
-                        model.fileName in ModelAssetPaths.REMOTE_DOWNLOAD ->
-                            "${model.fileName} pending download"
-                        else ->
-                            "${model.fileName} missing — add to assets/models/"
-                    },
+                    message =
+                        when {
+                            model.available ->
+                                "${model.fileName} available ($sizeMb MB)"
+                            corrupt ->
+                                "${model.fileName} corrupt (${model.sizeBytes} bytes) — re-downloading"
+                            model.fileName in ModelAssetPaths.REMOTE_DOWNLOAD ->
+                                "${model.fileName} pending download"
+                            else ->
+                                "${model.fileName} missing — add to assets/models/"
+                        },
                     isAlert = model.available,
                 ),
             )
@@ -556,7 +629,10 @@ class NovaOsViewModel(
         _lifecycleState.value = state
     }
 
-    fun setVoiceRecording(active: Boolean, listeningHint: String = "Listening… tap mic to stop.") {
+    fun setVoiceRecording(
+        active: Boolean,
+        listeningHint: String = "Listening… tap mic to stop.",
+    ) {
         _isRecordingVoice.value = active
         if (active) {
             _voiceStatusMessage.value = listeningHint
@@ -672,83 +748,87 @@ class NovaOsViewModel(
                 ),
             )
 
-            val startTimeMs = System.currentTimeMillis()
+            val startTimeNanos = System.nanoTime()
             try {
-                val result = withContext(Dispatchers.Default) {
-                    withTimeout(COMMAND_TIMEOUT_MS) {
-                        orchestrator.processUserCommand(command, traceId.toString())
+                val result =
+                    withContext(Dispatchers.Default) {
+                        withTimeout(COMMAND_TIMEOUT_MS) {
+                            orchestrator.processUserCommand(command, traceId.toString())
+                        }
                     }
-                }
-                val latencyMs = (System.currentTimeMillis() - startTimeMs).coerceAtLeast(1)
-                _retrievalLatencyMs.value = latencyMs.toInt()
+                val latencyMs = ((System.nanoTime() - startTimeNanos) / 1_000_000L).coerceAtLeast(0)
 
-                val (status, responseMsg, tag) = when (result) {
-                    is PipelineResult.Success -> {
-                        _activeLayer.value = "CORE: ${result.capabilityOperation.uppercase()}"
-                        if (result.summary != lastCommandCapabilityMessage) {
+                val (status, responseMsg, tag) =
+                    when (result) {
+                        is PipelineResult.Success -> {
+                            _activeLayer.value = "CORE: ${result.capabilityOperation.uppercase()}"
+                            if (result.summary != lastCommandCapabilityMessage) {
+                                prependActivity(
+                                    ActivityItem(
+                                        timestamp = now(),
+                                        source = "EXECUTION",
+                                        message = result.summary,
+                                        isAlert = true,
+                                    ),
+                                )
+                            }
+                            Triple("RESOLVED", result.summary, result.capabilityOperation)
+                        }
+                        is PipelineResult.PendingConfirmation -> {
                             prependActivity(
                                 ActivityItem(
                                     timestamp = now(),
-                                    source = "EXECUTION",
-                                    message = result.summary,
+                                    source = "CONFIRMATION",
+                                    message = result.confirmationPrompt,
                                     isAlert = true,
                                 ),
                             )
+                            Triple("PENDING", result.confirmationPrompt, "Confirmation Required")
                         }
-                        Triple("RESOLVED", result.summary, result.capabilityOperation)
-                    }
-                    is PipelineResult.PendingConfirmation -> {
-                        prependActivity(
-                            ActivityItem(
-                                timestamp = now(),
-                                source = "CONFIRMATION",
-                                message = result.confirmationPrompt,
-                                isAlert = true,
-                            ),
-                        )
-                        Triple("PENDING", result.confirmationPrompt, "Confirmation Required")
-                    }
-                    is PipelineResult.Failure -> {
-                        val detail = buildString {
-                            append(result.summary)
-                            result.error.code.takeIf { it.isNotBlank() }?.let {
-                                append(" [Error: $it]")
-                            }
-                            append(" (Stage: ${stageLabel(result.stage)})")
-                            result.error.userVisibleMessage.takeIf { it.isNotBlank() && it != result.summary }?.let {
-                                append("\n• Cause: $it")
-                            }
-                            result.error.diagnostics.entries
-                                .filter { it.key in FEED_DIAGNOSTIC_KEYS }
-                                .forEach { (key, value) ->
-                                    append("\n• $key: $value")
+                        is PipelineResult.Failure -> {
+                            val detail =
+                                buildString {
+                                    append(result.summary)
+                                    result.error.code.takeIf { it.isNotBlank() }?.let {
+                                        append(" [Error: $it]")
+                                    }
+                                    append(" (Stage: ${stageLabel(result.stage)})")
+                                    result.error.userVisibleMessage.takeIf { it.isNotBlank() && it != result.summary }?.let {
+                                        append("\n• Cause: $it")
+                                    }
+                                    result.error.diagnostics.entries
+                                        .filter { it.key in FEED_DIAGNOSTIC_KEYS }
+                                        .forEach { (key, value) ->
+                                            append("\n• $key: $value")
+                                        }
                                 }
+                            prependActivity(
+                                ActivityItem(
+                                    timestamp = now(),
+                                    source = stageLabel(result.stage),
+                                    message = detail,
+                                    isAlert = true,
+                                ),
+                            )
+                            Triple("ERROR", detail, result.error.code.ifBlank { result.stage.name })
                         }
-                        prependActivity(
-                            ActivityItem(
-                                timestamp = now(),
-                                source = stageLabel(result.stage),
-                                message = detail,
-                                isAlert = true,
-                            ),
-                        )
-                        Triple("ERROR", detail, result.error.code.ifBlank { result.stage.name })
+                        else -> Triple("RESOLVED", "Execution Completed", "Default")
                     }
-                    else -> Triple("RESOLVED", "Execution Completed", "Default")
-                }
 
-                val logEntry = CommandLogEntry(
-                    indexLabel = String.format("%02d", _commandHistory.value.size + 1),
-                    timestamp = now() + " UTC",
-                    latencyMs = latencyMs,
-                    status = status,
-                    commandText = command,
-                    responseText = responseMsg,
-                    tags = listOf(tag),
-                )
-                _commandHistory.update { listOf(logEntry) + it }
+                val logEntry =
+                    CommandLogEntry(
+                        indexLabel = String.format("%02d", _commandHistory.value.size + 1),
+                        timestamp = now(),
+                        latencyMs = latencyMs,
+                        status = status,
+                        commandText = command,
+                        responseText = responseMsg,
+                        tags = listOf(tag),
+                    )
+                _commandHistory.update { (listOf(logEntry) + it).take(100) }
+                commandMeasurements.update { CommandMeasurements(it.completed + 1, latencyMs) }
             } catch (exception: Exception) {
-                val latencyMs = (System.currentTimeMillis() - startTimeMs).coerceAtLeast(1)
+                val latencyMs = ((System.nanoTime() - startTimeNanos) / 1_000_000L).coerceAtLeast(0)
                 val errMsg = "Unexpected error: ${exception.message ?: exception::class.simpleName}"
                 prependActivity(
                     ActivityItem(
@@ -758,16 +838,18 @@ class NovaOsViewModel(
                         isAlert = true,
                     ),
                 )
-                val logEntry = CommandLogEntry(
-                    indexLabel = String.format("%02d", _commandHistory.value.size + 1),
-                    timestamp = now() + " UTC",
-                    latencyMs = latencyMs,
-                    status = "ERROR",
-                    commandText = command,
-                    responseText = errMsg,
-                    tags = listOf("Exception"),
-                )
-                _commandHistory.update { listOf(logEntry) + it }
+                val logEntry =
+                    CommandLogEntry(
+                        indexLabel = String.format("%02d", _commandHistory.value.size + 1),
+                        timestamp = now(),
+                        latencyMs = latencyMs,
+                        status = "ERROR",
+                        commandText = command,
+                        responseText = errMsg,
+                        tags = listOf("Exception"),
+                    )
+                _commandHistory.update { (listOf(logEntry) + it).take(100) }
+                commandMeasurements.update { CommandMeasurements(it.completed + 1, latencyMs) }
             } finally {
                 _isProcessing.value = false
             }
@@ -775,27 +857,28 @@ class NovaOsViewModel(
     }
 
     private fun subscribeToRuntimeEvents() {
-        val trackedEvents = setOf(
-            SystemEvents.RUNTIME_STARTED,
-            SystemEvents.RUNTIME_READY,
-            SystemEvents.RUNTIME_ERROR,
-            StorageEvents.INDEXING_STARTED,
-            StorageEvents.INDEXING_PROGRESS,
-            StorageEvents.INDEXING_COMPLETED,
-            UnderstandingEvents.INTENT_DETECTED,
-            UnderstandingEvents.NIR_GENERATED,
-            ReasoningEvents.STARTED,
-            ReasoningEvents.COMPLETED,
-            PlannerEvents.PLANNING_STARTED,
-            PlannerEvents.GRAPH_BUILT,
-            PlannerEvents.PLANNING_COMPLETED,
-            ExecutionEvents.STARTED,
-            ExecutionEvents.NODE_COMPLETED,
-            ExecutionEvents.GRAPH_COMPLETED,
-            ExecutionEvents.GRAPH_FAILED,
-            CapabilityEvents.EXECUTED,
-            CapabilityEvents.FAILED,
-        )
+        val trackedEvents =
+            setOf(
+                SystemEvents.RUNTIME_STARTED,
+                SystemEvents.RUNTIME_READY,
+                SystemEvents.RUNTIME_ERROR,
+                StorageEvents.INDEXING_STARTED,
+                StorageEvents.INDEXING_PROGRESS,
+                StorageEvents.INDEXING_COMPLETED,
+                UnderstandingEvents.INTENT_DETECTED,
+                UnderstandingEvents.NIR_GENERATED,
+                ReasoningEvents.STARTED,
+                ReasoningEvents.COMPLETED,
+                PlannerEvents.PLANNING_STARTED,
+                PlannerEvents.GRAPH_BUILT,
+                PlannerEvents.PLANNING_COMPLETED,
+                ExecutionEvents.STARTED,
+                ExecutionEvents.NODE_COMPLETED,
+                ExecutionEvents.GRAPH_COMPLETED,
+                ExecutionEvents.GRAPH_FAILED,
+                CapabilityEvents.EXECUTED,
+                CapabilityEvents.FAILED,
+            )
 
         eventBus.subscribe(
             object : com.nova.runtime.events.EventSubscriber {
@@ -804,10 +887,11 @@ class NovaOsViewModel(
 
                 override suspend fun onEvent(event: RuntimeEvent) {
                     if (event.eventType == CapabilityEvents.EXECUTED) {
-                        val matchDebug = (event.payload as? Map<*, *>)
-                            ?.get("matchDebug")
-                            ?.toString()
-                            ?.takeIf { it.isNotBlank() }
+                        val matchDebug =
+                            (event.payload as? Map<*, *>)
+                                ?.get("matchDebug")
+                                ?.toString()
+                                ?.takeIf { it.isNotBlank() }
                         if (matchDebug != null) {
                             prependActivity(
                                 ActivityItem(
@@ -851,9 +935,10 @@ class NovaOsViewModel(
     }
 
     private fun seedBootEvents() {
-        _activityFeed.value = listOf(
-            ActivityItem(now(), "KERNEL", "System boot initiated. Loading models and runtime modules…"),
-        )
+        _activityFeed.value =
+            listOf(
+                ActivityItem(now(), "KERNEL", "System boot initiated. Loading models and runtime modules…"),
+            )
     }
 
     fun dismissContentDetail() {
@@ -874,125 +959,133 @@ class NovaOsViewModel(
     }
 
     private fun formatEvent(event: RuntimeEvent): ActivityItem? {
-        val message = when (event.eventType) {
-            SystemEvents.RUNTIME_STARTED ->
-                "Runtime modules initializing…"
-            SystemEvents.RUNTIME_READY ->
-                "Runtime lifecycle transitioned to READY"
-            SystemEvents.RUNTIME_ERROR -> {
-                val payload = event.payload
-                if (payload is com.nova.runtime.events.system.RuntimeErrorPayload) {
-                    "Runtime error: ${payload.code} — ${payload.message}"
-                } else {
-                    "Runtime error reported"
+        val message =
+            when (event.eventType) {
+                SystemEvents.RUNTIME_STARTED ->
+                    "Runtime modules initializing…"
+                SystemEvents.RUNTIME_READY ->
+                    "Runtime lifecycle transitioned to READY"
+                SystemEvents.RUNTIME_ERROR -> {
+                    val payload = event.payload
+                    if (payload is com.nova.runtime.events.system.RuntimeErrorPayload) {
+                        "Runtime error: ${payload.code} — ${payload.message}"
+                    } else {
+                        "Runtime error reported"
+                    }
                 }
-            }
-            StorageEvents.INDEXING_STARTED ->
-                (event.payload as? Map<*, *>)?.get("message")?.toString()
-                    ?: "Indexing gallery, downloads, and documents…"
-            StorageEvents.INDEXING_PROGRESS ->
-                formatIndexingProgressFeed(event.payload as? Map<*, *>)
-                    ?: return null
-            StorageEvents.INDEXING_COMPLETED ->
-                (event.payload as? Map<*, *>)?.get("message")?.toString()
-                    ?: "Indexing complete"
-            UnderstandingEvents.INTENT_DETECTED -> "Intent detected"
-            UnderstandingEvents.NIR_GENERATED -> "NIR generated and validated"
-            ReasoningEvents.STARTED -> "Reasoning engine started"
-            ReasoningEvents.COMPLETED -> "Reasoning completed"
-            PlannerEvents.PLANNING_STARTED -> "Planning started"
-            PlannerEvents.GRAPH_BUILT -> "Action graph built"
-            PlannerEvents.PLANNING_COMPLETED -> "Planning completed"
-            ExecutionEvents.STARTED -> "Execution runtime started"
-            ExecutionEvents.NODE_COMPLETED -> "Action node completed"
-            ExecutionEvents.GRAPH_COMPLETED -> "Graph execution completed"
-            ExecutionEvents.GRAPH_FAILED -> {
-                val payload = event.payload as? Map<*, *>
-                val code = payload?.get("errorCode")?.toString()
-                val detail = payload?.get("userVisibleMessage")?.toString()
-                    ?: payload?.get("message")?.toString()
-                when {
-                    !detail.isNullOrBlank() -> "FAILED: $detail"
-                    !code.isNullOrBlank() -> "FAILED: Graph execution failed [$code]"
-                    else -> "FAILED: Graph execution failed"
+                StorageEvents.INDEXING_STARTED ->
+                    (event.payload as? Map<*, *>)?.get("message")?.toString()
+                        ?: "Indexing gallery, downloads, and documents…"
+                StorageEvents.INDEXING_PROGRESS ->
+                    formatIndexingProgressFeed(event.payload as? Map<*, *>)
+                        ?: return null
+                StorageEvents.INDEXING_COMPLETED ->
+                    (event.payload as? Map<*, *>)?.get("message")?.toString()
+                        ?: "Indexing complete"
+                UnderstandingEvents.INTENT_DETECTED -> "Intent detected"
+                UnderstandingEvents.NIR_GENERATED -> "NIR generated and validated"
+                ReasoningEvents.STARTED -> "Reasoning engine started"
+                ReasoningEvents.COMPLETED -> "Reasoning completed"
+                PlannerEvents.PLANNING_STARTED -> "Planning started"
+                PlannerEvents.GRAPH_BUILT -> "Action graph built"
+                PlannerEvents.PLANNING_COMPLETED -> "Planning completed"
+                ExecutionEvents.STARTED -> "Execution runtime started"
+                ExecutionEvents.NODE_COMPLETED -> "Action node completed"
+                ExecutionEvents.GRAPH_COMPLETED -> "Graph execution completed"
+                ExecutionEvents.GRAPH_FAILED -> {
+                    val payload = event.payload as? Map<*, *>
+                    val code = payload?.get("errorCode")?.toString()
+                    val detail =
+                        payload?.get("userVisibleMessage")?.toString()
+                            ?: payload?.get("message")?.toString()
+                    when {
+                        !detail.isNullOrBlank() -> "FAILED: $detail"
+                        !code.isNullOrBlank() -> "FAILED: Graph execution failed [$code]"
+                        else -> "FAILED: Graph execution failed"
+                    }
                 }
-            }
-            CapabilityEvents.EXECUTED -> {
-                val payload = event.payload as? Map<*, *>
-                val answer = payload?.get("userMessage")?.toString()
-                    ?: payload?.get("answer")?.toString()
-                val answerMode = payload?.get("answerMode")?.toString()
-                val contentSnippet = payload?.get("contentSnippet")?.toString()
-                val sourceFileName = payload?.get("sourceFileName")?.toString()
-                val sourceModifiedAt = payload?.get("sourceModifiedAt")?.toString()?.toLongOrNull()
-                val fullContent = contentSnippet?.takeIf { it.isNotBlank() }
-                    ?: if (answerMode == ANSWER_MODE_EXTRACT) answer else null
-                if (!answer.isNullOrBlank()) {
-                    lastCommandCapabilityMessage = answer
-                }
-                if (answerMode == ANSWER_MODE_EXTRACT && !fullContent.isNullOrBlank()) {
-                    _contentDetail.value = ContentDetailState(
-                        text = fullContent,
-                        fileName = sourceFileName,
-                        modifiedAtMillis = sourceModifiedAt,
+                CapabilityEvents.EXECUTED -> {
+                    val payload = event.payload as? Map<*, *>
+                    val answer =
+                        payload?.get("userMessage")?.toString()
+                            ?: payload?.get("answer")?.toString()
+                    val answerMode = payload?.get("answerMode")?.toString()
+                    val contentSnippet = payload?.get("contentSnippet")?.toString()
+                    val sourceFileName = payload?.get("sourceFileName")?.toString()
+                    val sourceModifiedAt = payload?.get("sourceModifiedAt")?.toString()?.toLongOrNull()
+                    val fullContent =
+                        contentSnippet?.takeIf { it.isNotBlank() }
+                            ?: if (answerMode == ANSWER_MODE_EXTRACT) answer else null
+                    if (!answer.isNullOrBlank()) {
+                        lastCommandCapabilityMessage = answer
+                    }
+                    if (answerMode == ANSWER_MODE_EXTRACT && !fullContent.isNullOrBlank()) {
+                        _contentDetail.value =
+                            ContentDetailState(
+                                text = fullContent,
+                                fileName = sourceFileName,
+                                modifiedAtMillis = sourceModifiedAt,
+                                answerMode = answerMode,
+                            )
+                    }
+                    val displayMessage = if (!answer.isNullOrBlank()) answer else "Capability executed successfully"
+                    return ActivityItem(
+                        timestamp = formatTimestamp(event.timestamp),
+                        source = moduleLabel(event.sourceModule),
+                        message = displayMessage,
+                        isAlert = event.eventType in ALERT_EVENTS,
+                        fullContent = fullContent,
                         answerMode = answerMode,
+                        sourceFileName = sourceFileName,
+                        sourceModifiedAtMillis = sourceModifiedAt,
+                        expandable =
+                            shouldExpandContent(
+                                answerMode = answerMode,
+                                fullContent = fullContent,
+                                message = displayMessage,
+                            ),
                     )
                 }
-                val displayMessage = if (!answer.isNullOrBlank()) answer else "Capability executed successfully"
-                return ActivityItem(
-                    timestamp = formatTimestamp(event.timestamp),
-                    source = moduleLabel(event.sourceModule),
-                    message = displayMessage,
-                    isAlert = event.eventType in ALERT_EVENTS,
-                    fullContent = fullContent,
-                    answerMode = answerMode,
-                    sourceFileName = sourceFileName,
-                    sourceModifiedAtMillis = sourceModifiedAt,
-                    expandable = shouldExpandContent(
-                        answerMode = answerMode,
-                        fullContent = fullContent,
-                        message = displayMessage,
-                    ),
-                )
-            }
-            CapabilityEvents.FAILED -> {
-                val payload = event.payload as? Map<*, *>
-                val detail = payload?.get("userVisibleMessage")?.toString()
-                    ?: payload?.get("message")?.toString()
-                    ?: payload?.get("reason")?.toString()
-                val code = payload?.get("errorCode")?.toString()
-                val providerId = payload?.get("providerId")?.toString()
-                val operation = payload?.get("operation")?.toString()
+                CapabilityEvents.FAILED -> {
+                    val payload = event.payload as? Map<*, *>
+                    val detail =
+                        payload?.get("userVisibleMessage")?.toString()
+                            ?: payload?.get("message")?.toString()
+                            ?: payload?.get("reason")?.toString()
+                    val code = payload?.get("errorCode")?.toString()
+                    val providerId = payload?.get("providerId")?.toString()
+                    val operation = payload?.get("operation")?.toString()
 
-                val diagList = payload?.entries
-                    ?.filter { (k, v) -> k.toString().startsWith("diag_") && v.toString().isNotBlank() }
-                    ?.map { (k, v) -> "${k.toString().removePrefix("diag_")}=$v" }
-                    .orEmpty()
+                    val diagList =
+                        payload?.entries
+                            ?.filter { (k, v) -> k.toString().startsWith("diag_") && v.toString().isNotBlank() }
+                            ?.map { (k, v) -> "${k.toString().removePrefix("diag_")}=$v" }
+                            .orEmpty()
 
-                buildString {
-                    append("FAILED")
-                    if (!code.isNullOrBlank()) append(" [$code]")
-                    if (!detail.isNullOrBlank()) {
-                        append(": ").append(detail)
-                    } else {
-                        append(": Capability execution failed")
-                    }
-                    if (!operation.isNullOrBlank() || !providerId.isNullOrBlank()) {
-                        append(" (")
-                        if (!providerId.isNullOrBlank()) append("provider=$providerId")
-                        if (!operation.isNullOrBlank()) {
-                            if (!providerId.isNullOrBlank()) append(", ")
-                            append("op=$operation")
+                    buildString {
+                        append("FAILED")
+                        if (!code.isNullOrBlank()) append(" [$code]")
+                        if (!detail.isNullOrBlank()) {
+                            append(": ").append(detail)
+                        } else {
+                            append(": Capability execution failed")
                         }
-                        append(")")
-                    }
-                    if (diagList.isNotEmpty()) {
-                        append(" · ").append(diagList.joinToString(", "))
+                        if (!operation.isNullOrBlank() || !providerId.isNullOrBlank()) {
+                            append(" (")
+                            if (!providerId.isNullOrBlank()) append("provider=$providerId")
+                            if (!operation.isNullOrBlank()) {
+                                if (!providerId.isNullOrBlank()) append(", ")
+                                append("op=$operation")
+                            }
+                            append(")")
+                        }
+                        if (diagList.isNotEmpty()) {
+                            append(" · ").append(diagList.joinToString(", "))
+                        }
                     }
                 }
+                else -> return null
             }
-            else -> return null
-        }
 
         if (event.eventType in SILENT_PIPELINE_EVENTS) return null
 
@@ -1014,7 +1107,10 @@ class NovaOsViewModel(
      * Keep at most one STORAGE indexing line in the feed.
      * While [live], the row stays replaceable; on completion it becomes a normal final line.
      */
-    private fun upsertIndexingFeedLine(item: ActivityItem, live: Boolean) {
+    private fun upsertIndexingFeedLine(
+        item: ActivityItem,
+        live: Boolean,
+    ) {
         val tagged =
             item.copy(
                 source = "STORAGE",
@@ -1097,7 +1193,11 @@ class NovaOsViewModel(
         return "Indexing · $category · $totalIndexed"
     }
 
-    private fun buildCoverageStatus(docsTotal: Int, ready: Int, pending: Int): String {
+    private fun buildCoverageStatus(
+        docsTotal: Int,
+        ready: Int,
+        pending: Int,
+    ): String {
         if (docsTotal <= 0) return "Indexing…"
         if (pending > 0) {
             return "Documents+Downloads: $docsTotal indexed · summaries $ready/$docsTotal"
@@ -1152,37 +1252,40 @@ class NovaOsViewModel(
 
     private fun scheduleClearIndexingStatus(delayMs: Long = INDEXING_READY_DISPLAY_MS) {
         clearIndexingStatusJob?.cancel()
-        clearIndexingStatusJob = viewModelScope.launch {
-            delay(delayMs)
-            _indexingStatus.value = null
-        }
+        clearIndexingStatusJob =
+            viewModelScope.launch {
+                delay(delayMs)
+                _indexingStatus.value = null
+            }
     }
 
     private fun now(): String = timeFormatter.format(Instant.now())
 
     private fun formatTimestamp(instant: Instant): String = timeFormatter.format(instant)
 
-    private fun moduleLabel(module: RuntimeModule): String = when (module) {
-        RuntimeModule.KERNEL -> "KERNEL"
-        RuntimeModule.UNDERSTANDING -> "SUP"
-        RuntimeModule.REASONING -> "REASONING"
-        RuntimeModule.PLANNER -> "PLANNER"
-        RuntimeModule.EXECUTION -> "EXECUTION"
-        RuntimeModule.POLICY -> "POLICY"
-        RuntimeModule.CAPABILITY -> "CAPABILITY"
-        RuntimeModule.CONVERSATION -> "CONVERSATION"
-        RuntimeModule.INFERENCE -> "INFERENCE"
-        RuntimeModule.MEMORY -> "MEMORY"
-        else -> module.name
-    }
+    private fun moduleLabel(module: RuntimeModule): String =
+        when (module) {
+            RuntimeModule.KERNEL -> "KERNEL"
+            RuntimeModule.UNDERSTANDING -> "SUP"
+            RuntimeModule.REASONING -> "REASONING"
+            RuntimeModule.PLANNER -> "PLANNER"
+            RuntimeModule.EXECUTION -> "EXECUTION"
+            RuntimeModule.POLICY -> "POLICY"
+            RuntimeModule.CAPABILITY -> "CAPABILITY"
+            RuntimeModule.CONVERSATION -> "CONVERSATION"
+            RuntimeModule.INFERENCE -> "INFERENCE"
+            RuntimeModule.MEMORY -> "MEMORY"
+            else -> module.name
+        }
 
-    private fun stageLabel(stage: PipelineStage): String = when (stage) {
-        PipelineStage.UNDERSTANDING -> "SUP"
-        PipelineStage.REASONING -> "REASONING"
-        PipelineStage.PLANNING -> "PLANNER"
-        PipelineStage.POLICY -> "POLICY"
-        PipelineStage.EXECUTION -> "EXECUTION"
-    }
+    private fun stageLabel(stage: PipelineStage): String =
+        when (stage) {
+            PipelineStage.UNDERSTANDING -> "SUP"
+            PipelineStage.REASONING -> "REASONING"
+            PipelineStage.PLANNING -> "PLANNER"
+            PipelineStage.POLICY -> "POLICY"
+            PipelineStage.EXECUTION -> "EXECUTION"
+        }
 
     private fun shouldExpandContent(
         answerMode: String?,
@@ -1205,44 +1308,48 @@ class NovaOsViewModel(
         private const val INDEXING_COVERAGE_DISPLAY_MS = 30_000L
         private const val SPARSE_DOC_THRESHOLD = 5
         private const val INDEXING_FEED_KEY = "indexing"
-        private val FEED_DIAGNOSTIC_KEYS = setOf(
-            "providerId",
-            "operation",
-            "capabilityType",
-            "permission",
-            "supportedOperations",
-            "alarmMode",
-            "triggerAtMillis",
-            "recipient",
-            "phoneNumber",
-            "reason",
-            "missingParameters",
-            "uri",
-            "name",
-        )
-        private val BOOT_REPLAY_EVENTS = setOf(
-            SystemEvents.RUNTIME_STARTED,
-            SystemEvents.RUNTIME_READY,
-        )
-        private val SILENT_PIPELINE_EVENTS = setOf(
-            UnderstandingEvents.INTENT_DETECTED,
-            UnderstandingEvents.NIR_GENERATED,
-            ReasoningEvents.STARTED,
-            ReasoningEvents.COMPLETED,
-            PlannerEvents.PLANNING_STARTED,
-            PlannerEvents.GRAPH_BUILT,
-            PlannerEvents.PLANNING_COMPLETED,
-            ExecutionEvents.STARTED,
-            ExecutionEvents.NODE_COMPLETED,
-            ExecutionEvents.GRAPH_COMPLETED,
-        )
-        private val ALERT_EVENTS = setOf(
-            SystemEvents.RUNTIME_READY,
-            ExecutionEvents.GRAPH_COMPLETED,
-            ExecutionEvents.GRAPH_FAILED,
-            CapabilityEvents.EXECUTED,
-            CapabilityEvents.FAILED,
-        )
+        private val FEED_DIAGNOSTIC_KEYS =
+            setOf(
+                "providerId",
+                "operation",
+                "capabilityType",
+                "permission",
+                "supportedOperations",
+                "alarmMode",
+                "triggerAtMillis",
+                "recipient",
+                "phoneNumber",
+                "reason",
+                "missingParameters",
+                "uri",
+                "name",
+            )
+        private val BOOT_REPLAY_EVENTS =
+            setOf(
+                SystemEvents.RUNTIME_STARTED,
+                SystemEvents.RUNTIME_READY,
+            )
+        private val SILENT_PIPELINE_EVENTS =
+            setOf(
+                UnderstandingEvents.INTENT_DETECTED,
+                UnderstandingEvents.NIR_GENERATED,
+                ReasoningEvents.STARTED,
+                ReasoningEvents.COMPLETED,
+                PlannerEvents.PLANNING_STARTED,
+                PlannerEvents.GRAPH_BUILT,
+                PlannerEvents.PLANNING_COMPLETED,
+                ExecutionEvents.STARTED,
+                ExecutionEvents.NODE_COMPLETED,
+                ExecutionEvents.GRAPH_COMPLETED,
+            )
+        private val ALERT_EVENTS =
+            setOf(
+                SystemEvents.RUNTIME_READY,
+                ExecutionEvents.GRAPH_COMPLETED,
+                ExecutionEvents.GRAPH_FAILED,
+                CapabilityEvents.EXECUTED,
+                CapabilityEvents.FAILED,
+            )
 
         private fun isStubTranscript(text: String): Boolean {
             val trimmed = text.trim()

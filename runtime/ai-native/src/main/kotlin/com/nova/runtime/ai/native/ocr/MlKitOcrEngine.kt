@@ -37,7 +37,16 @@ class MlKitOcrEngine : OcrEngine {
                     }
                     continuation.resume(
                         OcrResult.Success(
-                            text = visionText.text,
+                            text = com.nova.runtime.ai.model.OcrLayoutFormatter.format(
+                                lines = visionText.textBlocks.flatMap { block ->
+                                    block.lines.mapNotNull { line ->
+                                        line.boundingBox?.let { box ->
+                                            com.nova.runtime.ai.model.OcrLineBox(line.text, box.left, box.top, box.right, box.bottom)
+                                        }
+                                    }
+                                },
+                                fallback = visionText.text,
+                            ),
                             blocks = blocks,
                         ),
                     )
@@ -50,6 +59,7 @@ class MlKitOcrEngine : OcrEngine {
                         ),
                     )
                 }
+                .addOnCompleteListener { bitmap.recycle() }
         }
     }
 }

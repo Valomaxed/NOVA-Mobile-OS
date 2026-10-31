@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.nova.runtime.app.ui.NovaOsScreen
 import com.nova.runtime.app.ui.NovaOsViewModel
 import com.nova.runtime.app.ui.theme.NovaTheme
@@ -34,6 +35,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
         requestMissingRuntimePermissions()
         ensureExactAlarmPermission()
         ensureAllFilesAccess()

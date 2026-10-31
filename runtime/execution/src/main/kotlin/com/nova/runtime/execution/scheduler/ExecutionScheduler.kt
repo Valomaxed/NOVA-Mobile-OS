@@ -21,25 +21,27 @@ import com.nova.runtime.models.RuntimeError
 import com.nova.runtime.models.RuntimeModule
 import com.nova.runtime.models.contracts.ActionPolicyGate
 import com.nova.runtime.models.contracts.ActionPolicyRequest
-import com.nova.runtime.models.contracts.PolicyDecisionType
-import com.nova.runtime.models.contracts.PolicyEvaluationResult
 import com.nova.runtime.models.contracts.ExecutionRequest
 import com.nova.runtime.models.contracts.ExecutionResult
+import com.nova.runtime.models.contracts.PolicyDecisionType
+import com.nova.runtime.models.contracts.PolicyEvaluationResult
 import com.nova.runtime.policy.PolicyExecutionErrors
 import com.nova.runtime.utils.logging.NovaLogger
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /** Schedules and executes action nodes from a NAG respecting DAG dependencies. */
 class ExecutionScheduler(
@@ -64,6 +66,7 @@ class ExecutionScheduler(
         executionId: UUID,
         pauseFlag: AtomicBoolean,
         cancelFlag: AtomicBoolean,
+        controlState: StateFlow<ExecutionControlState>? = null,
     ): ExecutionResult {
         val graph = request.graph
         val traceId = request.traceId
@@ -89,13 +92,15 @@ class ExecutionScheduler(
 
         try {
             while (true) {
-                if (cancelFlag.get()) {
+                if (isCancelled(cancelFlag, controlState)) {
                     return cancelGraph(traceId, graphId, executionId, startNanos)
                 }
-                awaitWhilePaused(pauseFlag)
+                awaitWhilePaused(pauseFlag, cancelFlag, controlState)
+                if (isCancelled(cancelFlag, controlState)) return cancelGraph(traceId, graphId, executionId, startNanos)
 
-                val ready = dependencyResolver.readyNodes(graph, monitor.nodeStates())
-                    .filter { node -> node.id !in scheduledNodes }
+                val ready =
+                    dependencyResolver.readyNodes(graph, monitor.nodeStates())
+                        .filter { node -> node.id !in scheduledNodes }
                 if (ready.isNotEmpty()) {
                     queueManager.enqueue(ready)
                     ready.forEach { node ->
@@ -111,14 +116,16 @@ class ExecutionScheduler(
                     continue
                 }
 
-                val failed = executeBatch(
-                    batch = batch,
-                    graph = graph,
-                    traceId = traceId,
-                    pauseFlag = pauseFlag,
-                    cancelFlag = cancelFlag,
-                    lastUserMessage = lastUserMessage,
-                )
+                val failed =
+                    executeBatch(
+                        batch = batch,
+                        graph = graph,
+                        traceId = traceId,
+                        pauseFlag = pauseFlag,
+                        cancelFlag = cancelFlag,
+                        controlState = controlState,
+                        lastUserMessage = lastUserMessage,
+                    )
 
                 if (failed != null) {
                     val rollbackResult = rollbackManager.rollback(traceId, actionExecutor)
@@ -149,10 +156,10 @@ class ExecutionScheduler(
             )
         } finally {
             rollbackManager.clear()
-        retryAttempts.clear()
-        scheduledNodes.clear()
-        queueManager.clear()
-    }
+            retryAttempts.clear()
+            scheduledNodes.clear()
+            queueManager.clear()
+        }
     }
 
     private suspend fun executeBatch(
@@ -162,20 +169,23 @@ class ExecutionScheduler(
         pauseFlag: AtomicBoolean,
         cancelFlag: AtomicBoolean,
         lastUserMessage: AtomicReference<String?>,
-    ): RuntimeError? = coroutineScope {
-        val workerPool = WorkerPool(config.workerPoolSize, actionExecutor)
-        val semaphore = Semaphore(workerPool.withPermits { it })
+        controlState: StateFlow<ExecutionControlState>?,
+    ): RuntimeError? =
+        coroutineScope {
+            val workerPool = WorkerPool(config.workerPoolSize, actionExecutor)
+            val semaphore = Semaphore(workerPool.withPermits { it })
 
-        val outcomes = batch.map { node ->
-            async {
-                semaphore.withPermit {
-                    executeNode(node, graph, traceId, pauseFlag, cancelFlag, lastUserMessage)
-                }
-            }
-        }.awaitAll()
+            val outcomes =
+                batch.map { node ->
+                    async {
+                        semaphore.withPermit {
+                            executeNode(node, graph, traceId, pauseFlag, cancelFlag, lastUserMessage, controlState)
+                        }
+                    }
+                }.awaitAll()
 
-        outcomes.filterIsInstance<NodeBatchOutcome.Failed>().firstOrNull()?.error
-    }
+            outcomes.filterIsInstance<NodeBatchOutcome.Failed>().firstOrNull()?.error
+        }
 
     private suspend fun executeNode(
         node: ActionNode,
@@ -184,12 +194,17 @@ class ExecutionScheduler(
         pauseFlag: AtomicBoolean,
         cancelFlag: AtomicBoolean,
         lastUserMessage: AtomicReference<String?>,
+        controlState: StateFlow<ExecutionControlState>?,
     ): NodeBatchOutcome {
-        if (cancelFlag.get()) {
+        if (isCancelled(cancelFlag, controlState)) {
             monitor.transition(node.id, ExecutionNodeState.CANCELLED)
             return NodeBatchOutcome.Cancelled
         }
-        awaitWhilePaused(pauseFlag)
+        awaitWhilePaused(pauseFlag, cancelFlag, controlState)
+        if (isCancelled(cancelFlag, controlState)) {
+            monitor.transition(node.id, ExecutionNodeState.CANCELLED)
+            return NodeBatchOutcome.Cancelled
+        }
 
         scheduledNodes.remove(node.id)
         monitor.transition(node.id, ExecutionNodeState.RUNNING)
@@ -241,14 +256,15 @@ class ExecutionScheduler(
         traceId: UUID,
     ): NodeBatchOutcome.Failed? {
         when (
-            val result = actionPolicyGate.evaluateAction(
-                ActionPolicyRequest(
-                    node = node,
-                    traceId = traceId,
-                    graphId = graph.graphId,
-                    executionPolicies = graph.executionPolicies,
-                ),
-            )
+            val result =
+                actionPolicyGate.evaluateAction(
+                    ActionPolicyRequest(
+                        node = node,
+                        traceId = traceId,
+                        graphId = graph.graphId,
+                        executionPolicies = graph.executionPolicies,
+                    ),
+                )
         ) {
             is PolicyEvaluationResult.Failure -> {
                 monitor.transition(node.id, ExecutionNodeState.FAILED)
@@ -256,13 +272,14 @@ class ExecutionScheduler(
                 return NodeBatchOutcome.Failed(result.error)
             }
             is PolicyEvaluationResult.Success -> {
-                val error = when (result.decision.type) {
-                    PolicyDecisionType.APPROVED -> return null
-                    PolicyDecisionType.REJECTED ->
-                        PolicyExecutionErrors.denied(result.decision.rationale)
-                    PolicyDecisionType.REQUIRES_USER_CONFIRMATION ->
-                        PolicyExecutionErrors.confirmationRequired(result.decision.rationale)
-                }
+                val error =
+                    when (result.decision.type) {
+                        PolicyDecisionType.APPROVED -> return null
+                        PolicyDecisionType.REJECTED ->
+                            PolicyExecutionErrors.denied(result.decision.rationale)
+                        PolicyDecisionType.REQUIRES_USER_CONFIRMATION ->
+                            PolicyExecutionErrors.confirmationRequired(result.decision.rationale)
+                    }
                 monitor.transition(node.id, ExecutionNodeState.FAILED)
                 eventPublisher.publishNodeFailed(traceId, node.id, error.code)
                 return NodeBatchOutcome.Failed(error)
@@ -287,13 +304,14 @@ class ExecutionScheduler(
             "Execution completed with $completedNodes node(s)",
             traceId,
             durationMs = durationMs,
-            metadata = metrics.snapshot().let {
-                mapOf(
-                    "completedNodes" to it.completedNodes.toString(),
-                    "retryCount" to it.retryCount.toString(),
-                    "throughput" to "%.2f".format(it.throughputNodesPerSecond),
-                )
-            },
+            metadata =
+                metrics.snapshot().let {
+                    mapOf(
+                        "completedNodes" to it.completedNodes.toString(),
+                        "retryCount" to it.retryCount.toString(),
+                        "throughput" to "%.2f".format(it.throughputNodesPerSecond),
+                    )
+                },
         )
         return ExecutionResult.Success(completedNodes = completedNodes, userMessage = userMessage)
     }
@@ -338,9 +356,22 @@ class ExecutionScheduler(
         }
     }
 
-    private suspend fun awaitWhilePaused(pauseFlag: AtomicBoolean) {
-        while (pauseFlag.get() && !Thread.currentThread().isInterrupted) {
-            delay(POLL_INTERVAL_MS)
+    private fun isCancelled(
+        cancelFlag: AtomicBoolean,
+        controlState: StateFlow<ExecutionControlState>?,
+    ): Boolean = controlState?.value?.cancelled ?: cancelFlag.get()
+
+    private suspend fun awaitWhilePaused(
+        pauseFlag: AtomicBoolean,
+        cancelFlag: AtomicBoolean,
+        controlState: StateFlow<ExecutionControlState>?,
+    ) {
+        if (controlState != null) {
+            // StateFlow cannot lose resume/cancel signals sent before subscription.
+            controlState.first { !it.paused || it.cancelled }
+        } else {
+            // Compatibility for callers still using atomic flags.
+            while (pauseFlag.get() && !cancelFlag.get()) delay(POLL_INTERVAL_MS)
         }
     }
 
@@ -375,8 +406,11 @@ class ExecutionScheduler(
 
     private sealed interface NodeBatchOutcome {
         data object Success : NodeBatchOutcome
+
         data object Retrying : NodeBatchOutcome
+
         data object Cancelled : NodeBatchOutcome
+
         data class Failed(val error: RuntimeError) : NodeBatchOutcome
     }
 
@@ -385,11 +419,14 @@ class ExecutionScheduler(
     }
 }
 
+data class ExecutionControlState(val paused: Boolean = false, val cancelled: Boolean = false)
+
 data class ActiveGraphExecution(
     val graphId: UUID,
     val traceId: UUID,
     val executionId: UUID,
     val pauseFlag: AtomicBoolean = AtomicBoolean(false),
     val cancelFlag: AtomicBoolean = AtomicBoolean(false),
+    val controlState: MutableStateFlow<ExecutionControlState> = MutableStateFlow(ExecutionControlState()),
     val job: Job? = null,
 )

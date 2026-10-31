@@ -5,11 +5,11 @@ package com.nova.runtime.app.ui.components
  * SYSTEM, INDEX, ACTION, COMMAND, CONFIG.
  */
 enum class NovaScreenTab(val displayName: String) {
-    DASHBOARD("SYSTEM"),
-    DOCUMENTS("INDEX"),
-    ACTIONS("ACTION"),
-    COMMAND("COMMAND"),
-    SETTINGS("CONFIG");
+    DASHBOARD("Home"),
+    DOCUMENTS("Files"),
+    ACTIONS("Actions"),
+    COMMAND("Ask"),
+    SETTINGS("Settings");
 
     companion object {
         val SYSTEM = DASHBOARD

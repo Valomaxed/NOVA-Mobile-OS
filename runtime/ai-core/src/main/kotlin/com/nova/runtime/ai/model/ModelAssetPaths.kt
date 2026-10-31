@@ -18,7 +18,10 @@ object ModelAssetPaths {
      * Not used by the stub ONNX generative path — MediaPipeLocalLlmEngine loads this.
      * Source: litert-community/Gemma3-1B-IT (Hugging Face, gated — accept Gemma license).
      */
-    const val GEMMA_TASK_MODEL = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task"
+    const val GEMMA_TASK_MODEL = "Gemma3-1B-IT_multi-prefill-seq_q4_block128_ekv4096.task"
+    const val GEMMA_LEGACY_TASK_MODEL = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task"
+    const val GEMMA_CONTEXT_TOKENS = 4096
+    const val GEMMA_LEGACY_CONTEXT_TOKENS = 2048
     const val GEMMA_TASK_MIN_BYTES = 200_000_000L
 
     /**
@@ -33,7 +36,7 @@ object ModelAssetPaths {
     const val LLM_LIGHT_MODEL_VERSION = "llm-light-onnx-v1"
     const val LLM_FULL_MODEL_VERSION = "llm-full-onnx-v1"
     const val WHISPER_MODEL_VERSION = "whisper-tiny-onnx-v1"
-    const val GEMMA_TASK_MODEL_VERSION = "gemma-3-1b-it-int4-mediapipe-v1"
+    const val GEMMA_TASK_MODEL_VERSION = "gemma-3-1b-it-int4-block128-4k-mediapipe-v2"
     const val IMAGE_EMBEDDING_MODEL_VERSION = "mobileclip-s0-image-onnx-v1"
 
     const val DEFAULT_EMBEDDING_DIMENSION = 384

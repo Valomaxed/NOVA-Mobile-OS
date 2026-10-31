@@ -112,6 +112,19 @@ class DocumentSearchCapabilityProvider(
     ): Map<String, String> {
         val isExtract = answerMode == GroundedDocumentAnswerService.ANSWER_MODE_EXTRACT
         var snippet = contentSnippet?.takeIf { it.isNotBlank() }
+        val canExpandLexicalSnippet = snippet == null ||
+            (snippet.length <= DocumentDateIntelligence.DEFAULT_DATE_SNIPPET_CHARS &&
+                com.nova.runtime.storage.search.DocumentContentRanker.tokenize(query).any {
+                    documentContent.orEmpty().contains(it, ignoreCase = true)
+                })
+        if (!isExtract && !documentContent.isNullOrBlank() &&
+            canExpandLexicalSnippet &&
+            DocumentDateIntelligence.resolveDateTarget(query) == null &&
+            DocumentDateIntelligence.detectMealType(query) == null &&
+            !DocumentContentAnswerExtractor.isTimetableQuery(query)
+        ) {
+            snippet = com.nova.runtime.storage.search.DocumentPassageSelector.select(documentContent, query)
+        }
         if (isExtract && !documentContent.isNullOrBlank()) {
             snippet = DocumentDateIntelligence.extractExactSection(
                 query = query,

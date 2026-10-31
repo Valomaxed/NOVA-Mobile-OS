@@ -3,7 +3,6 @@ package com.nova.runtime.storage.search
 import com.nova.runtime.storage.dao.PhotoDao
 import com.nova.runtime.storage.entities.PhotoEntity
 import com.nova.runtime.utils.logging.NoOpRuntimeLogger
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
@@ -11,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.UUID
 
 class PhotoSearchServiceTest {
     private lateinit var dao: FakePhotoDao
@@ -30,10 +30,11 @@ class PhotoSearchServiceTest {
             val photo = samplePhoto(ocrText = "Invoice from Acme Corp")
             dao.records[photo.id] = photo
 
-            val page = service.search(
-                SearchRequest(query = "acme", limit = 10),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    SearchRequest(query = "acme", limit = 10),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(1, page.count)
             assertEquals(PhotoMatchSource.ROOM_OCR, page.items.first().matchSource)
@@ -42,21 +43,23 @@ class PhotoSearchServiceTest {
     @Test
     fun search_mergesMediaStoreMatches() =
         runTest {
-            mediaStore.items = listOf(
-                MediaImageItem(
-                    mediaId = 1L,
-                    uri = "content://media/external/images/media/1",
-                    displayName = "sunset_beach.jpg",
-                    mimeType = "image/jpeg",
-                    dateAdded = 100L,
-                    size = 1024L,
-                ),
-            )
+            mediaStore.items =
+                listOf(
+                    MediaImageItem(
+                        mediaId = 1L,
+                        uri = "content://media/external/images/media/1",
+                        displayName = "sunset_beach.jpg",
+                        mimeType = "image/jpeg",
+                        dateAdded = 100L,
+                        size = 1024L,
+                    ),
+                )
 
-            val page = service.search(
-                SearchRequest(query = "sunset", limit = 10),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    SearchRequest(query = "sunset", limit = 10),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(1, page.count)
             assertEquals(PhotoMatchSource.MEDIA_STORE, page.items.first().matchSource)
@@ -65,10 +68,11 @@ class PhotoSearchServiceTest {
     @Test
     fun search_emptyQueryResults_returnsEmptyPage() =
         runTest {
-            val page = service.search(
-                SearchRequest(query = "nonexistent", limit = 10),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    SearchRequest(query = "nonexistent", limit = 10),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(0, page.count)
             assertTrue(page.items.isEmpty())
@@ -94,14 +98,20 @@ class PhotoSearchServiceTest {
     private class FakeMediaStoreQueryPort : MediaStoreQueryPort {
         var items: List<MediaImageItem> = emptyList()
 
-        override suspend fun queryImages(limit: Int, offset: Int): MediaImageQueryResult =
-            MediaImageQueryResult(items.drop(offset).take(limit))
+        override suspend fun queryImages(
+            limit: Int,
+            offset: Int,
+        ): MediaImageQueryResult = MediaImageQueryResult(items.drop(offset).take(limit))
 
-        override suspend fun queryVideos(limit: Int, offset: Int): MediaImageQueryResult =
-            MediaImageQueryResult(emptyList())
+        override suspend fun queryVideos(
+            limit: Int,
+            offset: Int,
+        ): MediaImageQueryResult = MediaImageQueryResult(emptyList())
 
-        override suspend fun queryAudio(limit: Int, offset: Int): MediaImageQueryResult =
-            MediaImageQueryResult(emptyList())
+        override suspend fun queryAudio(
+            limit: Int,
+            offset: Int,
+        ): MediaImageQueryResult = MediaImageQueryResult(emptyList())
     }
 
     private class FakePhotoDao : PhotoDao {
@@ -123,13 +133,18 @@ class PhotoSearchServiceTest {
 
         override fun observeById(id: UUID): Flow<PhotoEntity?> = emptyFlow()
 
-        override suspend fun getByUri(uri: String): PhotoEntity? =
-            records.values.firstOrNull { it.uri == uri }
+        override suspend fun getExistingUris(uris: List<String>): List<String> = uris.filter { getByUri(it) != null }
+
+        override suspend fun getByUri(uri: String): PhotoEntity? = records.values.firstOrNull { it.uri == uri }
 
         override suspend fun searchByOcr(query: String): List<PhotoEntity> =
             records.values.filter { it.ocrText?.contains(query, ignoreCase = true) == true }
 
-        override suspend fun searchByOcrPaged(query: String, limit: Int, offset: Int): List<PhotoEntity> =
+        override suspend fun searchByOcrPaged(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ): List<PhotoEntity> =
             records.values
                 .filter { it.ocrText?.contains(query, ignoreCase = true) == true }
                 .sortedByDescending { it.takenAt }
@@ -139,13 +154,11 @@ class PhotoSearchServiceTest {
         override suspend fun countByOcr(query: String): Int =
             records.values.count { it.ocrText?.contains(query, ignoreCase = true) == true }
 
-        override suspend fun listRecent(limit: Int): List<PhotoEntity> =
-            records.values.sortedByDescending { it.takenAt }.take(limit)
+        override suspend fun listRecent(limit: Int): List<PhotoEntity> = records.values.sortedByDescending { it.takenAt }.take(limit)
 
         override suspend fun listUnindexedWithOcr(limit: Int): List<PhotoEntity> =
             records.values.filter { it.embeddingId == null && !it.ocrText.isNullOrBlank() }.take(limit)
 
-        override suspend fun listUnindexed(limit: Int): List<PhotoEntity> =
-            records.values.filter { it.embeddingId == null }.take(limit)
+        override suspend fun listUnindexed(limit: Int): List<PhotoEntity> = records.values.filter { it.embeddingId == null }.take(limit)
     }
 }

@@ -15,11 +15,11 @@ import com.nova.runtime.storage.search.DownloadsQueryPort
 import com.nova.runtime.storage.search.MediaImageItem
 import com.nova.runtime.storage.search.MediaStoreQueryPort
 import com.nova.runtime.utils.logging.NovaLogger
-import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /**
  * Syncs gallery photos, videos, audio, downloads, and documents from MediaStore into Room,
@@ -49,10 +49,11 @@ class MediaStoreIngestionService(
                 logger.warn(
                     module = RuntimeModule.STORAGE.name,
                     message = "MediaStore document sync empty — All files access may be required to index Downloads/PDFs",
-                    metadata = mapOf(
-                        "downloadsQueried" to "0",
-                        "filesQueried" to "0",
-                    ),
+                    metadata =
+                        mapOf(
+                            "downloadsQueried" to "0",
+                            "filesQueried" to "0",
+                        ),
                 )
             }
             indexPendingEmbeddings(limit)
@@ -91,39 +92,56 @@ class MediaStoreIngestionService(
         return result
     }
 
-    suspend fun ingestPhotos(limit: Int, offset: Int = 0): ItemIngestionResult =
+    suspend fun ingestPhotos(
+        limit: Int,
+        offset: Int = 0,
+    ): ItemIngestionResult =
         withContext(Dispatchers.IO) {
             val items = mediaStoreQuery.queryImages(limit, offset).items
             ingestPhotoItems(items)
         }
 
-    suspend fun ingestVideos(limit: Int, offset: Int = 0): ItemIngestionResult =
+    suspend fun ingestVideos(
+        limit: Int,
+        offset: Int = 0,
+    ): ItemIngestionResult =
         withContext(Dispatchers.IO) {
             val items = mediaStoreQuery.queryVideos(limit, offset).items
             ingestMediaAsDocuments(items, defaultPrefix = "video")
         }
 
-    suspend fun ingestAudio(limit: Int, offset: Int = 0): ItemIngestionResult =
+    suspend fun ingestAudio(
+        limit: Int,
+        offset: Int = 0,
+    ): ItemIngestionResult =
         withContext(Dispatchers.IO) {
             val items = mediaStoreQuery.queryAudio(limit, offset).items
             ingestMediaAsDocuments(items, defaultPrefix = "audio")
         }
 
-    suspend fun ingestDownloads(limit: Int, offset: Int = 0): ItemIngestionResult =
+    suspend fun ingestDownloads(
+        limit: Int,
+        offset: Int = 0,
+    ): ItemIngestionResult =
         withContext(Dispatchers.IO) {
             val items = downloadsQuery.queryDownloads(limit, offset).items
             ingestDownloadItems(items)
         }
 
-    suspend fun ingestFiles(limit: Int, offset: Int = 0): ItemIngestionResult =
+    suspend fun ingestFiles(
+        limit: Int,
+        offset: Int = 0,
+    ): ItemIngestionResult =
         withContext(Dispatchers.IO) {
             val items = documentsQuery.queryDocuments(limit, offset).items
             ingestDownloadItems(items)
         }
 
     /** @deprecated Use [ingestDownloads] — kept for test compatibility. */
-    suspend fun ingestDocuments(limit: Int, offset: Int = 0): ItemIngestionResult =
-        ingestDownloads(limit, offset)
+    suspend fun ingestDocuments(
+        limit: Int,
+        offset: Int = 0,
+    ): ItemIngestionResult = ingestDownloads(limit, offset)
 
     suspend fun indexPendingEmbeddings(limit: Int = SearchIndexPipeline.DEFAULT_BATCH_LIMIT) {
         searchIndexPipeline.ensureIndexed(
@@ -139,12 +157,14 @@ class MediaStoreIngestionService(
     private suspend fun ingestPhotoItems(items: List<MediaImageItem>): ItemIngestionResult {
         var ingested = 0
         var skipped = 0
+        val existing = existingPhotoUris(items.map { it.uri })
         items.forEach { item ->
-            if (photoDao.getByUri(item.uri) != null) {
+            if (item.uri in existing) {
                 skipped++
                 return@forEach
             }
             if (ingestPhotoItem(item)) {
+                existing.add(item.uri)
                 ingested++
             }
         }
@@ -157,12 +177,14 @@ class MediaStoreIngestionService(
     ): ItemIngestionResult {
         var ingested = 0
         var skipped = 0
+        val existing = existingDocumentPaths(items.map { it.uri })
         items.forEach { item ->
-            if (documentDao.getByPath(item.uri) != null) {
+            if (item.uri in existing) {
                 skipped++
                 return@forEach
             }
             if (ingestMediaDocumentItem(item, defaultPrefix)) {
+                existing.add(item.uri)
                 ingested++
             }
         }
@@ -172,12 +194,14 @@ class MediaStoreIngestionService(
     private suspend fun ingestDownloadItems(items: List<DownloadItem>): ItemIngestionResult {
         var ingested = 0
         var skipped = 0
+        val existing = existingDocumentPaths(items.map { it.uri })
         items.forEach { item ->
-            if (documentDao.getByPath(item.uri) != null) {
+            if (item.uri in existing) {
                 skipped++
                 return@forEach
             }
             if (ingestDocumentItem(item)) {
+                existing.add(item.uri)
                 ingested++
             }
         }
@@ -249,6 +273,18 @@ class MediaStoreIngestionService(
         documentRepository.insert(document)
         searchIndexPipeline.indexDocument(document)
         return true
+    }
+
+    private suspend fun existingPhotoUris(uris: List<String>): MutableSet<String> {
+        val existing = mutableSetOf<String>()
+        for (batch in uris.distinct().chunked(256)) existing += photoDao.getExistingUris(batch)
+        return existing
+    }
+
+    private suspend fun existingDocumentPaths(paths: List<String>): MutableSet<String> {
+        val existing = mutableSetOf<String>()
+        for (batch in paths.distinct().chunked(256)) existing += documentDao.getExistingPaths(batch)
+        return existing
     }
 
     private fun stableId(value: String): UUID = UUID.nameUUIDFromBytes(value.toByteArray())

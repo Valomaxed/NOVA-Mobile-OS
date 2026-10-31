@@ -3,9 +3,9 @@ package com.nova.runtime.app.ui.components
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -114,7 +114,7 @@ private fun EmptyActivityState(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ActivityCard(
+internal fun ActivityCard(
     item: ActivityItem,
     onExpandContent: (ContentDetailState) -> Unit,
     modifier: Modifier = Modifier,
@@ -164,7 +164,7 @@ private fun ActivityCard(
             Text(
                 text = item.timestamp,
                 style = MaterialTheme.typography.labelSmall,
-                color = androidx.compose.ui.graphics.Color(0xFFDDDDDD),
+                color = NovaColors.textSecondary,
             )
         }
 
@@ -174,7 +174,7 @@ private fun ActivityCard(
             color = if (item.isAlert || item.message.startsWith("FAILED", ignoreCase = true)) {
                 NovaColors.error
             } else {
-                androidx.compose.ui.graphics.Color.White
+                NovaColors.textPrimary
             },
             maxLines = if (isExtract || canExpand) Int.MAX_VALUE else 6,
             overflow = TextOverflow.Ellipsis,

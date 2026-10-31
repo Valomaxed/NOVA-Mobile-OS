@@ -11,28 +11,32 @@ import com.nova.runtime.ai.native.llm.MediaPipeLocalLlmEngine
 import com.nova.runtime.ai.native.onnx.OnnxEmbeddingGenerator
 import com.nova.runtime.ai.native.search.di.SearchCapabilityRegistrar
 import com.nova.runtime.android.di.androidCapabilityModule
+import com.nova.runtime.android.notificationAdapter.MessageIngestionBridge
+import com.nova.runtime.android.notificationAdapter.WhatsAppMessageIngestionService
 import com.nova.runtime.app.di.aiIntegrationModule
-import com.nova.runtime.app.di.personalOsModule
 import com.nova.runtime.app.di.appUiModule
 import com.nova.runtime.app.di.executionPersistenceModule
+import com.nova.runtime.app.di.personalOsModule
 import com.nova.runtime.app.di.runtimeModule
 import com.nova.runtime.app.indexing.MediaIndexingScheduler
 import com.nova.runtime.app.indexing.MessageIndexingScheduler
-import com.nova.runtime.android.notificationAdapter.MessageIngestionBridge
-import com.nova.runtime.android.notificationAdapter.WhatsAppMessageIngestionService
 import com.nova.runtime.capability.registry.CapabilityRegistry
 import com.nova.runtime.kernel.RuntimeKernel
 import com.nova.runtime.storage.di.storageModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.android.ext.koin.androidContext
+import org.koin.core.Koin
 import org.koin.core.context.GlobalContext
 import org.koin.core.context.startKoin
-import org.koin.core.Koin
 
 class NovaApplication : Application() {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -79,7 +83,19 @@ class NovaApplication : Application() {
                 koin.get<WhatsAppMessageIngestionService>().ingest(messages)
                 MessageIndexingScheduler.enqueueFollowUp(this@NovaApplication)
             }
-            preWarmModelsWhenReady(koin)
+            // Warm-up is optional and must not delay independent WorkManager scheduling.
+            // Models load on demand; startup must not eagerly allocate the LLM.
+            applicationScope.launch {
+                koin.get<ModelDownloadManager>().state
+                    .map { it.readiness.embeddingReady }
+                    .distinctUntilChanged()
+                    .filter { it }
+                    .collect {
+                        // Catch up work that ran before embedding files became available.
+                        MediaIndexingScheduler.enqueueNextBatch(this@NovaApplication)
+                        MessageIndexingScheduler.enqueueFollowUp(this@NovaApplication)
+                    }
+            }
             MediaIndexingScheduler.startFullIndexing(this@NovaApplication)
             MessageIndexingScheduler.start(this@NovaApplication)
         }

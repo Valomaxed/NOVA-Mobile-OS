@@ -160,7 +160,8 @@ class PlaceholderIntentClassifier : IntentClassifier {
                 Regex("""\b${Regex.escape(noun)}\b""").containsMatchIn(payload)
             } || MEAL_WORDS.any { it in payload } ||
                 "mess" in payload ||
-                TIMETABLE_WORDS.any { it in payload }
+                TIMETABLE_WORDS.any { it in payload } ||
+                DOCUMENT_FILENAME_REGEX.containsMatchIn(payload)
             return contentCue
         }
 
@@ -176,6 +177,8 @@ class PlaceholderIntentClassifier : IntentClassifier {
             val words = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
             return words.size <= 3 && words.all { it in CHATTY_WORDS }
         }
+
+        private val DOCUMENT_FILENAME_REGEX = Regex("""\b[\w-]+\.(?:txt|md|csv|json|pdf|docx|xlsx)\b""")
 
         private val DOCUMENT_SHARE_NOUNS = listOf(
             "document", "documents", "doc", "docs", "pdf", "file", "report", "invoice", "menu",

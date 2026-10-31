@@ -30,8 +30,8 @@ import kotlin.system.measureTimeMillis
  * Semantic KNN search over indexed photo and document embeddings (DPS §7).
  *
  * Document retrieval is two-stage:
- * - Stage A: rank by hybrid score on (name + summary) discovery vectors + keyword/filename boosts
- * - Stage B: snippets/answers extracted from full [com.nova.runtime.storage.entities.DocumentEntity.contentText]
+ * - Stage A: rank discovery/body-passage vectors with keyword and filename signals.
+ * - Stage B: select a query-focused excerpt from the persisted source body.
  */
 class SemanticSearchService(
     private val embeddingGenerator: EmbeddingGenerator,
@@ -82,7 +82,11 @@ class SemanticSearchService(
             }
 
             val fetchK = (request.offset + request.limit).coerceAtMost(SearchRequest.MAX_LIMIT)
-            val rawHits = searchIndexedObjects(embeddableQuery, traceId, objectTypes, fetchK)
+            val fileNames = DocumentContentRanker.explicitFileNames(normalizedQuery)
+            val rawHits = if (fileNames.isNotEmpty() && OBJECT_TYPE_DOCUMENT in objectTypes) {
+                fileNames.flatMap { name -> documentDao.searchByName(name).filter { it.name.equals(name, ignoreCase = true) } }
+                    .distinctBy { it.id }.map { RankedObjectHit(it.id, OBJECT_TYPE_DOCUMENT, 1f) }
+            } else searchIndexedObjects(embeddableQuery, traceId, objectTypes, fetchK)
             forceExtractTopDocumentHits(rawHits)
             val rankedHits = applyHybridDocumentRanking(
                 hits = if (wantsRecency) {
@@ -111,7 +115,7 @@ class SemanticSearchService(
                             }
                         }
                     }
-                    resolveHit(hit.objectId, hit.objectType, hit.score, dateTarget, mealType, normalizedQuery)
+                    resolveHit(hit.objectId, hit.objectType, hit.score, dateTarget, mealType, normalizedQuery, hit.passageStart)
                 }
             val hits = preferGroundedDocumentAnswers(resolved, normalizedQuery)
                 .take(request.limit)
@@ -173,28 +177,22 @@ class SemanticSearchService(
 
         if (OBJECT_TYPE_DOCUMENT in objectTypes) {
             textQueryVector?.let { queryVector ->
-                // Prefer Stage A summary embeddings; fall back to untyped document vectors
-                // so pre-migration indexes still resolve until backfill completes.
-                val summaryHits = vectorIndex.search(
+                // Search body passages and discovery vectors, then deduplicate by document.
+                val documentHits = vectorIndex.search(
                     VectorSearchRequest(
                         queryVector = queryVector,
-                        k = k,
+                        k = (k * 8).coerceAtLeast(32).coerceAtMost(1024),
                         metadataFilter = mapOf(
                             EmbeddingMetadata.OBJECT_TYPE to OBJECT_TYPE_DOCUMENT,
-                            EmbeddingMetadata.EMBEDDING_KIND to EmbeddingMetadata.KIND_SUMMARY,
                         ),
                     ),
                 )
-                val documentHits = summaryHits.ifEmpty {
-                    vectorIndex.search(
-                        VectorSearchRequest(
-                            queryVector = queryVector,
-                            k = k,
-                            metadataFilter = mapOf(EmbeddingMetadata.OBJECT_TYPE to OBJECT_TYPE_DOCUMENT),
-                        ),
+                hits += documentHits.map {
+                    RankedObjectHit(
+                        it.objectId, it.objectType, it.score,
+                        passageStart = it.metadata[EmbeddingMetadata.PASSAGE_START]?.toIntOrNull(),
                     )
                 }
-                hits += documentHits.map { RankedObjectHit(it.objectId, it.objectType, it.score) }
             }
             hits += fetchContentFtsHits(query, k)
         }
@@ -476,6 +474,7 @@ class SemanticSearchService(
         dateTarget: DocumentDateIntelligence.DateTarget? = null,
         mealType: String? = null,
         query: String? = null,
+        passageStart: Int? = null,
     ): SemanticSearchHit? =
         when (objectType) {
             OBJECT_TYPE_PHOTO -> {
@@ -498,7 +497,13 @@ class SemanticSearchService(
                     snippet = document.path,
                     // Stage B: always extract answers from full contentText, never the summary.
                     contentSnippet = document.contentText?.let { content ->
-                        DocumentDateIntelligence.extractScopedSnippet(
+                        if (dateTarget == null && mealType == null &&
+                            !DocumentContentAnswerExtractor.isTimetableQuery(query.orEmpty())
+                        ) {
+                            com.nova.runtime.storage.search.DocumentPassageSelector.select(
+                                content, query.orEmpty(), preferredStart = passageStart,
+                            )
+                        } else DocumentDateIntelligence.extractScopedSnippet(
                             content = content,
                             target = dateTarget,
                             mealType = mealType,
@@ -562,6 +567,7 @@ class SemanticSearchService(
         val modifiedAt: Long = 0L,
         val hasContent: Boolean = false,
         val structureScore: Float = 0f,
+        val passageStart: Int? = null,
     )
 
     companion object {

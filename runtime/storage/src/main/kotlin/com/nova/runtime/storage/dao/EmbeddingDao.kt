@@ -33,6 +33,21 @@ interface EmbeddingDao {
     @Query("SELECT * FROM embeddings WHERE vectorBlob IS NOT NULL")
     suspend fun listWithPersistedVectors(): List<EmbeddingEntity>
 
+    @Query(
+        """
+        SELECT * FROM embeddings
+        WHERE vectorBlob IS NOT NULL AND (:afterId IS NULL OR embeddingId > :afterId)
+        ORDER BY embeddingId LIMIT :limit
+        """,
+    )
+    suspend fun listPersistedVectorsPage(
+        afterId: UUID?,
+        limit: Int,
+    ): List<EmbeddingEntity>
+
+    @Query("SELECT COUNT(*) FROM embeddings WHERE vectorBlob IS NOT NULL")
+    fun observePersistedVectorCount(): Flow<Int>
+
     @Query("SELECT COUNT(*) FROM embeddings")
     fun observeCount(): Flow<Int>
 

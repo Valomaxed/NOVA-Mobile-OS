@@ -31,6 +31,7 @@ class MediaIndexingWorker(
     private val eventBus: EventBus by inject()
 
     override suspend fun doWork(): Result {
+        if (!(applicationContext.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager).isCharging) return Result.success()
         val traceId = UUID.randomUUID()
         // Only announce once per cycle — chaining batches must not spam STARTED.
         if (inputData.getBoolean(KEY_ANNOUNCE_START, false)) {
@@ -136,13 +137,15 @@ object MediaIndexingScheduler {
                 .build()
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             UNIQUE_PERIODIC_WORK,
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
     }
 
     private fun defaultConstraints(): Constraints =
         Constraints.Builder()
+            .setRequiresCharging(true)
+            .setRequiresBatteryNotLow(true)
             .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
             .build()
 }

@@ -36,6 +36,8 @@ class OnnxEmbeddingGenerator(
     override val isLoaded: Boolean
         get() = sessionManager.isLoaded && tokenizer.isLoaded
 
+    override fun passages(text: String) = tokenizer.passages(text)
+
     override suspend fun embed(text: String): EmbeddingResult {
         if (text.isBlank()) {
             return EmbeddingResult.Failure("Cannot embed empty text")

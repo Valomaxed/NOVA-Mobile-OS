@@ -1,7 +1,8 @@
 package com.nova.runtime.ai.native.ingestion
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.nova.runtime.ai.model.EmbeddingGenerator
-import com.nova.runtime.ai.model.EmbeddingResult
 import com.nova.runtime.ai.model.HashEmbeddingGenerator
 import com.nova.runtime.ai.model.HashImageEmbeddingGenerator
 import com.nova.runtime.ai.model.ImageEmbeddingGenerator
@@ -27,19 +28,17 @@ import com.nova.runtime.storage.search.MediaImageQueryResult
 import com.nova.runtime.storage.search.MediaStoreQueryPort
 import com.nova.runtime.storage.search.NoOpDocumentsQueryPort
 import com.nova.runtime.utils.logging.NoOpRuntimeLogger
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
-import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import org.junit.Before
+import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -171,28 +170,35 @@ class FullDeviceIndexerTest {
     }
 
     private class StubOcrEngine : OcrEngine {
-        override suspend fun recognize(imageBytes: ByteArray): OcrResult =
-            OcrResult.Success("indexed text")
+        override suspend fun recognize(imageBytes: ByteArray): OcrResult = OcrResult.Success("indexed text")
     }
 
     private class FakeMediaStoreQueryPort(
         private val items: List<MediaImageItem>,
     ) : MediaStoreQueryPort {
-        override suspend fun queryImages(limit: Int, offset: Int): MediaImageQueryResult =
-            MediaImageQueryResult(items.drop(offset).take(limit))
+        override suspend fun queryImages(
+            limit: Int,
+            offset: Int,
+        ): MediaImageQueryResult = MediaImageQueryResult(items.drop(offset).take(limit))
 
-        override suspend fun queryVideos(limit: Int, offset: Int): MediaImageQueryResult =
-            MediaImageQueryResult(emptyList())
+        override suspend fun queryVideos(
+            limit: Int,
+            offset: Int,
+        ): MediaImageQueryResult = MediaImageQueryResult(emptyList())
 
-        override suspend fun queryAudio(limit: Int, offset: Int): MediaImageQueryResult =
-            MediaImageQueryResult(emptyList())
+        override suspend fun queryAudio(
+            limit: Int,
+            offset: Int,
+        ): MediaImageQueryResult = MediaImageQueryResult(emptyList())
     }
 
     private class FakeDownloadsQueryPort(
         private val items: List<DownloadItem>,
     ) : DownloadsQueryPort {
-        override suspend fun queryDownloads(limit: Int, offset: Int): DownloadQueryResult =
-            DownloadQueryResult(items.drop(offset).take(limit))
+        override suspend fun queryDownloads(
+            limit: Int,
+            offset: Int,
+        ): DownloadQueryResult = DownloadQueryResult(items.drop(offset).take(limit))
     }
 
     private class RecordingPhotoRepository : PhotoRepository {
@@ -241,10 +247,22 @@ class FullDeviceIndexerTest {
 
     private class FakeEmbeddingRepository : EmbeddingRepository {
         override suspend fun insert(embedding: com.nova.runtime.storage.entities.EmbeddingEntity) = Unit
+
         override suspend fun update(embedding: com.nova.runtime.storage.entities.EmbeddingEntity) = Unit
+
         override suspend fun delete(embeddingId: UUID) = Unit
+
         override suspend fun getById(embeddingId: UUID) = null
+
         override fun observeById(embeddingId: UUID): Flow<com.nova.runtime.storage.entities.EmbeddingEntity?> = emptyFlow()
+
+        override suspend fun listPersistedVectorsPage(
+            afterId: UUID?,
+            limit: Int,
+        ): List<com.nova.runtime.storage.entities.EmbeddingEntity> =
+            listWithPersistedVectors().filter { afterId == null || it.embeddingId.toString() > afterId.toString() }
+                .sortedBy { it.embeddingId.toString() }.take(limit)
+
         override suspend fun listWithPersistedVectors(): List<com.nova.runtime.storage.entities.EmbeddingEntity> = emptyList()
     }
 
@@ -252,44 +270,90 @@ class FullDeviceIndexerTest {
         private val repository: RecordingPhotoRepository,
     ) : PhotoDao {
         override suspend fun insert(photo: PhotoEntity) = repository.insert(photo)
+
         override suspend fun update(photo: PhotoEntity) = repository.update(photo)
+
         override suspend fun delete(photo: PhotoEntity) = repository.delete(photo.id)
+
         override suspend fun getById(id: UUID) = repository.getById(id)
+
         override fun observeById(id: UUID) = repository.observeById(id)
+
+        override suspend fun getExistingUris(uris: List<String>): List<String> = uris.filter { getByUri(it) != null }
+
         override suspend fun getByUri(uri: String) = repository.records.values.firstOrNull { it.uri == uri }
+
         override suspend fun searchByOcr(query: String) = emptyList<PhotoEntity>()
-        override suspend fun searchByOcrPaged(query: String, limit: Int, offset: Int) = emptyList<PhotoEntity>()
+
+        override suspend fun searchByOcrPaged(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ) = emptyList<PhotoEntity>()
+
         override suspend fun countByOcr(query: String) = 0
+
         override suspend fun listRecent(limit: Int) = repository.records.values.take(limit)
+
         override suspend fun listUnindexedWithOcr(limit: Int) =
             repository.records.values.filter { it.embeddingId == null && !it.ocrText.isNullOrBlank() }.take(limit)
-        override suspend fun listUnindexed(limit: Int) =
-            repository.records.values.filter { it.embeddingId == null }.take(limit)
+
+        override suspend fun listUnindexed(limit: Int) = repository.records.values.filter { it.embeddingId == null }.take(limit)
     }
 
     private class FakeDocumentDao(
         private val repository: RecordingDocumentRepository,
     ) : DocumentDao {
         override suspend fun insert(document: DocumentEntity) = repository.insert(document)
+
         override suspend fun update(document: DocumentEntity) = repository.update(document)
+
         override suspend fun delete(document: DocumentEntity) = repository.delete(document.id)
+
         override suspend fun getById(id: UUID) = repository.getById(id)
+
         override fun observeById(id: UUID) = repository.observeById(id)
+
+        override suspend fun getExistingPaths(paths: List<String>): List<String> = paths.filter { getByPath(it) != null }
+
         override suspend fun getByPath(path: String) = repository.records.values.firstOrNull { it.path == path }
+
         override suspend fun searchByName(query: String) = emptyList<DocumentEntity>()
-        override suspend fun searchFullText(query: String, limit: Int, offset: Int) = emptyList<DocumentEntity>()
+
+        override suspend fun searchFullText(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ) = emptyList<DocumentEntity>()
+
         override suspend fun countFullText(query: String) = 0
+
         override suspend fun getByProjectId(projectId: UUID) = emptyList<DocumentEntity>()
-        override suspend fun listUnindexed(limit: Int) =
-            repository.records.values.filter { it.embeddingId == null }.take(limit)
-        override suspend fun listMissingContentText(limit: Int) =
-            repository.records.values.filter { it.contentText == null }.take(limit)
-        override suspend fun listMissingSummary(limit: Int) =
-            repository.records.values.filter { it.summary == null }.take(limit)
+
+        override suspend fun listUnindexed(limit: Int) = repository.records.values.filter { it.embeddingId == null }.take(limit)
+
+        override suspend fun listMissingContentText(limit: Int) = repository.records.values.filter { it.contentText == null }.take(limit)
+
+        override suspend fun listMissingSummary(limit: Int) = repository.records.values.filter { it.summary == null }.take(limit)
+
+        override fun observeAll(): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
+            kotlinx.coroutines.flow.flowOf(
+                repository.records.values.toList(),
+            )
+
+        override fun observeCount(): kotlinx.coroutines.flow.Flow<Int> = kotlinx.coroutines.flow.flowOf(repository.records.size)
+
+        override fun observeIndexedCount(): kotlinx.coroutines.flow.Flow<Int> =
+            kotlinx.coroutines.flow.flowOf(
+                repository.records.values.count {
+                    it.embeddingId != null
+                },
+            )
+
         override suspend fun countAll() = repository.records.size
-        override suspend fun countWithSummary() =
-            repository.records.values.count { !it.summary.isNullOrBlank() }
-        override suspend fun countMissingSummary() =
-            repository.records.values.count { it.summary.isNullOrBlank() }
+
+        override suspend fun countWithSummary() = repository.records.values.count { !it.summary.isNullOrBlank() }
+
+        override suspend fun countMissingSummary() = repository.records.values.count { it.summary.isNullOrBlank() }
     }
 }

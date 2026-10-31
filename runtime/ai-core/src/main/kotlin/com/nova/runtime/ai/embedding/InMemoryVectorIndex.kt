@@ -1,5 +1,9 @@
 package com.nova.runtime.ai.embedding
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import java.util.PriorityQueue
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
@@ -53,35 +57,60 @@ data class VectorSearchHit(
     val metadata: Map<String, String>,
 )
 
+data class VectorSearchStats(
+    val completedSearches: Long = 0,
+    val lastDurationNanos: Long? = null,
+    val lastCandidatesScored: Int = 0,
+)
+
 class InMemoryVectorIndex {
+    private val _searchStats = MutableStateFlow(VectorSearchStats())
+    val searchStats = _searchStats.asStateFlow()
+
     private val entries = ConcurrentHashMap<UUID, VectorIndexEntry>()
 
-    fun insert(embeddingId: UUID, vector: FloatArray, metadata: Map<String, String> = emptyMap()) {
-        entries[embeddingId] = VectorIndexEntry(
-            embeddingId = embeddingId,
-            vector = VectorMath.l2Normalize(vector.copyOf()),
-            metadata = metadata,
-        )
+    fun insert(
+        embeddingId: UUID,
+        vector: FloatArray,
+        metadata: Map<String, String> = emptyMap(),
+    ) {
+        entries[embeddingId] =
+            VectorIndexEntry(
+                embeddingId = embeddingId,
+                vector = VectorMath.l2Normalize(vector.copyOf()),
+                metadata = metadata,
+            )
     }
 
     fun search(request: VectorSearchQuery): List<VectorSearchHit> {
+        val startedAt = System.nanoTime()
         val normalizedQuery = VectorMath.l2Normalize(request.queryVector.copyOf())
         val topK = request.k.coerceAtLeast(1)
 
-        return entries.values
-            .asSequence()
-            .filter { entry -> request.metadataFilter.all { (key, value) -> entry.metadata[key] == value } }
-            .map { entry ->
-                VectorSearchHit(
-                    embeddingId = entry.embeddingId,
-                    score = VectorMath.cosineSimilarity(normalizedQuery, entry.vector),
-                    metadata = entry.metadata,
-                )
+        // A worst-first heap retains only k candidates. The encounter ordinal preserves
+        // the previous stable sort's order for equal scores, including signed zero/NaN.
+        val retained = PriorityQueue<RankedEntry>(compareBy<RankedEntry> { it.score }.thenByDescending { it.ordinal })
+        var ordinal = 0L
+        for (entry in entries.values) {
+            if (!request.metadataFilter.all { (key, value) -> entry.metadata[key] == value }) continue
+            val score = VectorMath.cosineSimilarity(normalizedQuery, entry.vector)
+            val currentOrdinal = ordinal++
+            val worst = retained.peek()
+            if (retained.size < topK || score.compareTo(worst.score) > 0) {
+                if (retained.size == topK) retained.poll()
+                retained.add(RankedEntry(entry, score, currentOrdinal))
             }
-            .sortedByDescending { it.score }
-            .take(topK)
-            .toList()
+        }
+        val result =
+            retained.sortedWith(compareByDescending<RankedEntry> { it.score }.thenBy { it.ordinal })
+                .map { VectorSearchHit(it.entry.embeddingId, it.score, it.entry.metadata) }
+        _searchStats.update {
+            VectorSearchStats(it.completedSearches + 1, System.nanoTime() - startedAt, ordinal.toInt())
+        }
+        return result
     }
+
+    private data class RankedEntry(val entry: VectorIndexEntry, val score: Float, val ordinal: Long)
 
     fun delete(embeddingId: UUID) {
         entries.remove(embeddingId)
@@ -96,6 +125,5 @@ class InMemoryVectorIndex {
 
     fun clear() = entries.clear()
 
-    fun snapshot(limit: Int = Int.MAX_VALUE): List<VectorIndexEntry> =
-        entries.values.take(min(limit, entries.size))
+    fun snapshot(limit: Int = Int.MAX_VALUE): List<VectorIndexEntry> = entries.values.take(min(limit, entries.size))
 }

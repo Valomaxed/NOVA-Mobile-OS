@@ -13,33 +13,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Objective Modernist (Swiss Style) Palette Specifications
-val NovaAkzidenzRed = Color(0xFFB5000B)
-val NovaPrimaryRedContainer = Color(0xFFE30613)
-val NovaPureBlack = Color(0xFF1A1C1C)
-val NovaOffWhite = Color(0xFFF9F9F9)
+// Quiet light palette. Legacy aliases keep older screens on the same design tokens.
+val NovaAccentBlue = Color(0xFF245BC4)
+val NovaAkzidenzRed = NovaAccentBlue
+val NovaPrimaryRedContainer = Color(0xFF245BC4)
+val NovaPureBlack = Color(0xFF202124)
+val NovaOffWhite = Color(0xFFF4F5F7)
 val NovaSurfaceLowest = Color(0xFFFFFFFF)
-val NovaSurfaceLow = Color(0xFFF3F3F3)
-val NovaSurfaceContainer = Color(0xFFEEEEEE)
-val NovaSurfaceHigh = Color(0xFFE8E8E8)
-val NovaSurfaceHighest = Color(0xFFE2E2E2)
-val NovaSurfaceContainerHighest = Color(0xFFE2E2E2)
-val NovaSurfaceDim = Color(0xFFDADADA)
-val NovaSecondaryGrey = Color(0xFF5E5E5E)
-val NovaOnSecondaryVariant = Color(0xFF646464)
-val NovaOutlineGrey = Color(0xFF936E69)
+val NovaSurfaceLow = Color(0xFFF0F2F5)
+val NovaSurfaceContainer = Color(0xFFEBEEF3)
+val NovaSurfaceHigh = Color(0xFFE6EAF0)
+val NovaSurfaceHighest = Color(0xFFE1E5EC)
+val NovaSurfaceContainerHighest = Color(0xFFE1E5EC)
+val NovaSurfaceDim = Color(0xFFDCE1E9)
+val NovaSecondaryGrey = Color(0xFF626873)
+val NovaOnSecondaryVariant = Color(0xFF626873)
+val NovaOutlineGrey = Color(0xFF737B88)
 val NovaErrorRed = Color(0xFFBA1A1A)
 
 // Legacy & UI Color Aliases for backward compatibility
 val NovaNeonOrange = NovaAkzidenzRed
-val NovaSystemBlue = Color(0xFF1A1C1C)
-val NovaSystemGreen = NovaAkzidenzRed
+val NovaSystemBlue = NovaAccentBlue
+val NovaSystemGreen = Color(0xFF28734D)
 val NovaSystemRed = NovaErrorRed
 val NovaSystemOrange = NovaAkzidenzRed
 val NovaSystemGray = NovaSecondaryGrey
 val NovaCyanAccent = NovaAkzidenzRed
 val NovaIndigoAccent = NovaPureBlack
-val NovaEmeraldGreen = NovaAkzidenzRed
+val NovaEmeraldGreen = NovaSystemGreen
 val NovaDarkBackground = NovaOffWhite
 val NovaSurfaceDark = NovaSurfaceHighest
 val NovaSurfaceVariant = NovaSurfaceHighest
@@ -61,18 +62,18 @@ object NovaColors {
     val primary @Composable get() = MaterialTheme.colorScheme.primary
     val accent @Composable get() = MaterialTheme.colorScheme.primary
     val neonOrange @Composable get() = NovaAkzidenzRed
-    val success @Composable get() = NovaPureBlack
+    val success @Composable get() = NovaSystemGreen
     val error @Composable get() = NovaErrorRed
-    val cardBorder @Composable get() = NovaPureBlack
+    val cardBorder @Composable get() = MaterialTheme.colorScheme.outlineVariant
     val glassSurface @Composable get() = NovaSurfaceLowest
-    val glassBorder @Composable get() = NovaPureBlack
+    val glassBorder @Composable get() = MaterialTheme.colorScheme.outlineVariant
 }
 
-private val NovaModernistColorScheme = lightColorScheme(
+private val NovaLightColorScheme = lightColorScheme(
     primary = NovaAkzidenzRed,
     onPrimary = NovaSurfaceLowest,
-    primaryContainer = NovaPrimaryRedContainer,
-    onPrimaryContainer = Color(0xFFFFF5F3),
+    primaryContainer = Color(0xFFE8EFFF),
+    onPrimaryContainer = NovaAkzidenzRed,
     secondary = NovaSecondaryGrey,
     onSecondary = NovaSurfaceLowest,
     secondaryContainer = NovaSurfaceHighest,
@@ -81,45 +82,45 @@ private val NovaModernistColorScheme = lightColorScheme(
     onTertiary = NovaSurfaceLowest,
     background = NovaOffWhite,
     onBackground = NovaPureBlack,
-    surface = NovaOffWhite,
+    surface = NovaSurfaceLowest,
     onSurface = NovaPureBlack,
     surfaceVariant = NovaSurfaceHighest,
-    onSurfaceVariant = Color(0xFF5E3F3B),
-    surfaceTint = Color(0xFFC0000C),
+    onSurfaceVariant = NovaSecondaryGrey,
+    surfaceTint = Color(0xFF245BC4),
     outline = NovaOutlineGrey,
-    outlineVariant = Color(0xFFE9BCB6),
+    outlineVariant = NovaSurfaceDim,
     error = NovaErrorRed,
     onError = NovaSurfaceLowest,
     errorContainer = Color(0xFFFFDAD6),
     onErrorContainer = Color(0xFF93000A),
 )
 
-// Objective Modernist Typography Scale (Inter)
+// Mobile typography: predictable line height and system font scaling.
 private val NovaTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.ExtraBold, // 800
-        fontSize = 72.sp,
+        fontWeight = FontWeight.SemiBold, // 800
+        fontSize = 40.sp,
         letterSpacing = (-0.03).sp,
-        lineHeight = 72.sp,
+        lineHeight = 48.sp,
     ),
     headlineLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold, // 700
-        fontSize = 48.sp,
-        letterSpacing = (-0.02).sp,
-        lineHeight = 52.sp,
-    ),
-    headlineMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold, // 700
-        fontSize = 32.sp,
+        fontWeight = FontWeight.SemiBold, // 700
+        fontSize = 28.sp,
         letterSpacing = (-0.02).sp,
         lineHeight = 36.sp,
     ),
+    headlineMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold, // 700
+        fontSize = 24.sp,
+        letterSpacing = (-0.02).sp,
+        lineHeight = 32.sp,
+    ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         letterSpacing = 0.sp,
         lineHeight = 24.sp,
@@ -127,9 +128,9 @@ private val NovaTypography = Typography(
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal, // 400
-        fontSize = 20.sp,
+        fontSize = 16.sp,
         letterSpacing = (-0.01).sp,
-        lineHeight = 30.sp,
+        lineHeight = 24.sp,
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -140,7 +141,7 @@ private val NovaTypography = Typography(
     ),
     labelMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold, // 700
+        fontWeight = FontWeight.SemiBold, // 700
         fontSize = 14.sp,
         letterSpacing = 0.05.sp,
         lineHeight = 16.sp,
@@ -154,13 +155,13 @@ private val NovaTypography = Typography(
     ),
 )
 
-// Strictly zero corner radius everywhere — right-angled geometry only.
+// Rounded surfaces and native controls, without decorative elevation.
 private val NovaShapes = Shapes(
-    extraSmall = RoundedCornerShape(0.dp),
-    small = RoundedCornerShape(0.dp),
-    medium = RoundedCornerShape(0.dp),
-    large = RoundedCornerShape(0.dp),
-    extraLarge = RoundedCornerShape(0.dp),
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(28.dp),
 )
 
 @Composable
@@ -169,7 +170,7 @@ fun NovaTheme(
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
-        colorScheme = NovaModernistColorScheme,
+        colorScheme = NovaLightColorScheme,
         typography = NovaTypography,
         shapes = NovaShapes,
         content = content,

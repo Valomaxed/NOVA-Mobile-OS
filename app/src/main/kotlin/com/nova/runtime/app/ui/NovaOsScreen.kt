@@ -3,17 +3,17 @@ package com.nova.runtime.app.ui
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -21,8 +21,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nova.runtime.ai.model.ModelDownloadPhase
-import com.nova.runtime.app.ui.components.CommandBar
 import com.nova.runtime.app.ui.components.ContentDetailSheet
 import com.nova.runtime.app.ui.components.ModelDownloadOverlay
 import com.nova.runtime.app.ui.components.NovaBottomNavBar
@@ -35,13 +35,12 @@ import com.nova.runtime.app.ui.tabs.CommandTab
 import com.nova.runtime.app.ui.tabs.DashboardTab
 import com.nova.runtime.app.ui.tabs.DocumentsTab
 import com.nova.runtime.app.ui.tabs.SettingsTab
-import com.nova.runtime.app.ui.theme.NovaSurfaceContainerHighest
+import com.nova.runtime.app.ui.theme.NovaColors
 import com.nova.runtime.app.voice.VoiceCaptureController
 import org.koin.androidx.compose.koinViewModel
 
 /**
- * Objective Modernist Main Container Screen for NOVA Mobile OS.
- * Hosts top bar, bottom navigation bar, crossfading screen tabs, and overlays.
+ * Main container with measured navigation space, safe areas, and lifecycle-aware state.
  */
 @Composable
 fun NovaOsScreen(
@@ -49,18 +48,17 @@ fun NovaOsScreen(
     modifier: Modifier = Modifier,
     onboardingViewModel: ProfileOnboardingViewModel = koinViewModel(),
 ) {
-    val lifecycleState by viewModel.lifecycleState.collectAsState()
-    val selectedTab by viewModel.selectedTab.collectAsState()
-    val activityFeed by viewModel.activityFeed.collectAsState()
-    val isProcessing by viewModel.isProcessing.collectAsState()
-    val isRecordingVoice by viewModel.isRecordingVoice.collectAsState()
-    val voiceStatusMessage by viewModel.voiceStatusMessage.collectAsState()
-    val whisperAvailable by viewModel.whisperAvailable.collectAsState()
-    val modelDownloadState by viewModel.modelDownloadState.collectAsState()
-    val indexingStatus by viewModel.indexingStatus.collectAsState()
-    val contentDetail by viewModel.contentDetail.collectAsState()
-    val telemetryState by viewModel.telemetryState.collectAsState()
-    val showOnboarding by onboardingViewModel.showOnboarding.collectAsState()
+    val lifecycleState by viewModel.lifecycleState.collectAsStateWithLifecycle()
+    val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
+    val activityFeed by viewModel.activityFeed.collectAsStateWithLifecycle()
+    val isProcessing by viewModel.isProcessing.collectAsStateWithLifecycle()
+    val isRecordingVoice by viewModel.isRecordingVoice.collectAsStateWithLifecycle()
+    val whisperAvailable by viewModel.whisperAvailable.collectAsStateWithLifecycle()
+    val modelDownloadState by viewModel.modelDownloadState.collectAsStateWithLifecycle()
+    val indexingStatus by viewModel.indexingStatus.collectAsStateWithLifecycle()
+    val contentDetail by viewModel.contentDetail.collectAsStateWithLifecycle()
+    val telemetryState by viewModel.telemetryState.collectAsStateWithLifecycle()
+    val showOnboarding by onboardingViewModel.showOnboarding.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -91,19 +89,21 @@ fun NovaOsScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(NovaSurfaceContainerHighest),
+            .background(NovaColors.background),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = 16.dp),
+                .imePadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // Top Navigation Bar
             NovaTopTabBar(
                 selectedTab = selectedTab,
                 onTabSelected = viewModel::selectTab,
                 onProfileClick = onboardingViewModel::openProfileOnboarding,
+                modifier = Modifier.widthIn(max = 840.dp).padding(horizontal = 20.dp),
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -125,10 +125,12 @@ fun NovaOsScreen(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(bottom = 76.dp),
+                    .widthIn(max = 840.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp),
             ) {
-                Crossfade(targetState = selectedTab, label = "TabCrossfade") { tab ->
-                    when (tab) {
+                run {
+                    when (selectedTab) {
                         NovaScreenTab.DASHBOARD -> DashboardTab(
                             viewModel = viewModel,
                             lifecycleState = lifecycleState,
@@ -161,16 +163,11 @@ fun NovaOsScreen(
                     }
                 }
             }
+            NovaBottomNavBar(
+                selectedTab = selectedTab,
+                onTabSelected = viewModel::selectTab,
+            )
         }
-
-        // Objective Modernist Swiss Bottom Navigation Bar
-        NovaBottomNavBar(
-            selectedTab = selectedTab,
-            onTabSelected = viewModel::selectTab,
-            onActionOrbClick = ::toggleVoiceRecording,
-            isRecordingVoice = isRecordingVoice,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
 
         // Content Detail Bottom Sheet Modal
         ContentDetailSheet(

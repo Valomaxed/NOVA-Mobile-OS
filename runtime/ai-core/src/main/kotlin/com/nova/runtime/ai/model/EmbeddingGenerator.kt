@@ -32,6 +32,10 @@ interface EmbeddingGenerator {
     val isLoaded: Boolean
 
     suspend fun embed(text: String): EmbeddingResult
+
+    /** Implementations with a vocabulary override this with actual encoder token counts. */
+    fun passages(text: String): List<com.nova.runtime.ai.tokenizer.TextPassage> =
+        com.nova.runtime.ai.tokenizer.TextPassages.split(text, tokenCount = { it.length }, maxTokens = 640, overlapTokens = 96)
 }
 
 /** Deterministic hash-based embeddings for unit tests only — not used in production search. */

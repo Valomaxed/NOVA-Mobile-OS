@@ -151,23 +151,26 @@ class MessageRepositoryImpl(
 
     override suspend fun getById(id: UUID): MessageEntity? = messageDao.getById(id)
 
-    override suspend fun getByExternalId(externalId: String): MessageEntity? =
-        messageDao.getByExternalId(externalId)
+    override suspend fun getByExternalId(externalId: String): MessageEntity? = messageDao.getByExternalId(externalId)
 
-    override suspend fun listByChannel(channel: String, limit: Int): List<MessageEntity> =
-        messageDao.listByChannel(channel, limit)
+    override suspend fun listByChannel(
+        channel: String,
+        limit: Int,
+    ): List<MessageEntity> = messageDao.listByChannel(channel, limit)
 
     override suspend fun listUnindexed(limit: Int): List<MessageEntity> = messageDao.listUnindexed(limit)
 
-    override suspend fun search(channel: String, query: String, limit: Int): List<MessageEntity> =
-        messageDao.search(channel, query, limit)
+    override suspend fun search(
+        channel: String,
+        query: String,
+        limit: Int,
+    ): List<MessageEntity> = messageDao.search(channel, query, limit)
 
     override suspend fun countByChannel(channel: String): Int = messageDao.countByChannel(channel)
 
     override suspend fun getRecent(limit: Int): List<MessageEntity> = messageDao.getRecent(limit)
 
-    override suspend fun getHighImportance(limit: Int): List<MessageEntity> =
-        messageDao.getHighImportance(limit)
+    override suspend fun getHighImportance(limit: Int): List<MessageEntity> = messageDao.getHighImportance(limit)
 
     override suspend fun getSince(since: Long): List<MessageEntity> = messageDao.getSince(since)
 }
@@ -175,6 +178,8 @@ class MessageRepositoryImpl(
 class EmbeddingRepositoryImpl(
     private val embeddingDao: EmbeddingDao,
 ) : EmbeddingRepository {
+    override suspend fun getByObjectId(objectId: UUID): List<EmbeddingEntity> = embeddingDao.getByObjectId(objectId)
+
     override suspend fun insert(embedding: EmbeddingEntity) = embeddingDao.insert(embedding)
 
     override suspend fun update(embedding: EmbeddingEntity) = embeddingDao.update(embedding)
@@ -187,6 +192,10 @@ class EmbeddingRepositoryImpl(
 
     override fun observeById(embeddingId: UUID) = embeddingDao.observeById(embeddingId)
 
-    override suspend fun listWithPersistedVectors(): List<EmbeddingEntity> =
-        embeddingDao.listWithPersistedVectors()
+    override suspend fun listPersistedVectorsPage(
+        afterId: UUID?,
+        limit: Int,
+    ): List<EmbeddingEntity> = embeddingDao.listPersistedVectorsPage(afterId, limit)
+
+    override suspend fun listWithPersistedVectors(): List<EmbeddingEntity> = embeddingDao.listWithPersistedVectors()
 }

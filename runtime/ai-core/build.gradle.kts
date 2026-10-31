@@ -15,9 +15,15 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform()
+    useJUnitPlatform { excludeTags("benchmark") }
 }
 
-tasks.test {
-    useJUnitPlatform()
+tasks.register<Test>("vectorSearchBenchmark") {
+    description = "Compare exact vector search algorithms on the host JVM."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("benchmark") }
+    systemProperty("nova.benchmark.report", layout.buildDirectory.file("reports/vector-search-benchmark.csv").get().asFile.absolutePath)
+    outputs.upToDateWhen { false }
 }

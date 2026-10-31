@@ -20,6 +20,15 @@ class MiniLmTokenizer private constructor(
     val unavailableReason: String?
         get() = loadError
 
+    fun passages(text: String): List<com.nova.runtime.ai.tokenizer.TextPassage> {
+        require(isLoaded) { loadError ?: "MiniLM tokenizer is not loaded" }
+        return com.nova.runtime.ai.tokenizer.TextPassages.split(
+            text = text,
+            tokenCount = { requireNotNull(tokenizer).tokenizeToWordPieces(it).size },
+            maxTokens = MAX_LENGTH - 2,
+        )
+    }
+
     fun tokenize(text: String, maxLength: Int = MAX_LENGTH): TokenizedInput {
         require(isLoaded) { loadError ?: "MiniLM tokenizer is not loaded" }
         val encoded = requireNotNull(tokenizer).encode(text, maxLength)

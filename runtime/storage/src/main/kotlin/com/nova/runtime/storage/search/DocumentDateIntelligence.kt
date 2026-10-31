@@ -166,7 +166,7 @@ object DocumentDateIntelligence {
                             DocumentContentNormalizer.timetableStructureScore(plain) >= 6f
                     }
                 } else {
-                    extractLeadSnippet(plain)
+                    DocumentPassageSelector.select(plain, query.orEmpty(), maxChars = maxChars)
                 }
             }
             target.monthScoped ->
@@ -374,9 +374,12 @@ object DocumentDateIntelligence {
         }
 
     private fun splitGridCells(line: String): List<String> {
-        val pipeSplit = line.split('|').map { it.trim() }.filter { it.isNotBlank() }
+        val rawPipeSplit = line.split('|').map { it.trim() }
+        val pipeSplit = if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+            rawPipeSplit.drop(1).dropLast(1)
+        } else rawPipeSplit
         if (pipeSplit.size >= MIN_GRID_DAY_COLUMNS) return pipeSplit
-        val tabSplit = line.split('\t').map { it.trim() }.filter { it.isNotBlank() }
+        val tabSplit = line.split('\t').map { it.trim() }
         if (tabSplit.size >= MIN_GRID_DAY_COLUMNS) return tabSplit
         val spaceSplit = line.split(Regex("""\s{2,}""")).map { it.trim() }.filter { it.isNotBlank() }
         if (spaceSplit.size >= MIN_GRID_DAY_COLUMNS) return spaceSplit
@@ -586,8 +589,12 @@ object DocumentDateIntelligence {
         }
         val base = if (DocumentContentAnswerExtractor.isTimetableQuery(query)) {
             DocumentContentAnswerExtractor.formatTimetableAnswer(query, grounded, today)
-        } else {
+        } else if (detectMealType(query) != null ||
+            Regex("""\b(?:menu|mess)\b""", RegexOption.IGNORE_CASE).containsMatchIn(query)
+        ) {
             formatMenuAnswer(query, grounded, today)
+        } else {
+            grounded.take(DEFAULT_ANSWER_CHARS)
         }
         return withSourceAttribution(base, sourceFileName, sourceModifiedAt)
     }
@@ -865,7 +872,7 @@ object DocumentDateIntelligence {
     const val DEFAULT_DATE_SNIPPET_CHARS = 700
     const val DEFAULT_LEAD_SNIPPET_CHARS = 300
     const val DEFAULT_MEAL_SNIPPET_CHARS = 280
-    const val DEFAULT_ANSWER_CHARS = 400
+    const val DEFAULT_ANSWER_CHARS = 6_000
     const val DEFAULT_MENU_EXTRACT_CHARS = 150
     const val DEFAULT_TIMETABLE_EXTRACT_CHARS = 250
     const val DEFAULT_EXTRACT_CHARS = 4_000

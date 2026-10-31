@@ -38,6 +38,7 @@ fun storageModule(context: Context) =
     module {
         single<NovaDatabase> { NovaDatabaseProvider.create(context) }
         single { get<NovaDatabase>().documentDao() }
+        single { get<NovaDatabase>().documentLibraryDao() }
         single { get<NovaDatabase>().photoDao() }
         single { get<NovaDatabase>().contactDao() }
         single { get<NovaDatabase>().projectDao() }

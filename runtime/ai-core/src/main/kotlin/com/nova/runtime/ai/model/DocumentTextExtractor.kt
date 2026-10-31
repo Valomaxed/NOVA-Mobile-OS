@@ -33,9 +33,9 @@ interface DocumentTextExtractor {
         }
 
     companion object {
-        /** OCR page budget for scanned PDFs (raised for multi-page menus/timetables). */
-        const val DEFAULT_MAX_PAGES = 16
-        const val DEFAULT_MAX_CHARS = 32_000
+        /** Digital PDF coverage; Android's OCR fallback retains a separate smaller page budget. */
+        const val DEFAULT_MAX_PAGES = 128
+        const val DEFAULT_MAX_CHARS = 128_000
 
         val PLAIN_TEXT_EXTENSIONS: Set<String> =
             setOf("txt", "md", "csv", "json", "log", "xml", "html", "htm")

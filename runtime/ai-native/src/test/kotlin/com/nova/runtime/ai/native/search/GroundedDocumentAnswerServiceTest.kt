@@ -8,6 +8,52 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GroundedDocumentAnswerServiceTest {
+    @Test
+    fun detailedAnswersAndSourceContextSurviveBeyondPreviousCaps() = runTest {
+        val source = "Inspect the bearings and align the motor before starting. ".repeat(100)
+        var contextLength = 0
+        var outputBudget = 0
+        val llm = object : LocalLlmEngine {
+            override fun isAvailable() = true
+            override suspend fun generate(prompt: String, maxTokens: Int): String {
+                outputBudget = maxTokens
+                return source
+            }
+            override suspend fun generateGrounded(context: String, buildPrompt: (String) -> String, maxTokens: Int): String? {
+                contextLength = context.length
+                return generate(buildPrompt(context), maxTokens)
+            }
+        }
+        val answer = GroundedDocumentAnswerService(llm).answer("Explain the motor procedure", source, "manual.txt", null)
+        assertTrue(contextLength > 2400)
+        assertTrue(outputBudget == 1024)
+        assertTrue(answer.length > 2400)
+        assertTrue(answer.contains("manual.txt"))
+    }
+
+    @Test
+    fun fabricatedQuantityIsRejectedEvenWhenOtherWordsOverlap() = runTest {
+        val llm = object : LocalLlmEngine {
+            override fun isAvailable() = true
+            override suspend fun generate(prompt: String, maxTokens: Int) = "The QUARTZ-921 actuator warranty lasts 70 years."
+        }
+        val answer = GroundedDocumentAnswerService(llm).answer(
+            "What is the actuator warranty?", "The QUARTZ-921 actuator warranty lasts 7 years.", "manual.txt", null,
+        )
+        assertTrue(answer.contains("7 years"))
+        assertFalse(answer.contains("70 years"))
+        assertFalse(answer.startsWith("Menu:"))
+    }
+
+    @Test
+    fun preservesDetailedGenericAnswerBeyondOldFourHundredCharacterLimit() = runTest {
+        val content = "Operating procedure\n\n" + "Verify the bearing alignment and lubrication before starting the motor. ".repeat(16)
+        val answer = GroundedDocumentAnswerService().answer("Explain the operating procedure", content, "manual.txt", null)
+        assertTrue(answer.length > 400)
+        assertTrue(answer.contains("\n\n"))
+        assertFalse(answer.startsWith("Menu:"))
+    }
+
 
     @Test
     fun extractMode_returnsVerbatimSnippetWithAttribution() = runTest {

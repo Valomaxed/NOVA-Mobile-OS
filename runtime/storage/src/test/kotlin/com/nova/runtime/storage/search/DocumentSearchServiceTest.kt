@@ -3,7 +3,6 @@ package com.nova.runtime.storage.search
 import com.nova.runtime.storage.dao.DocumentDao
 import com.nova.runtime.storage.entities.DocumentEntity
 import com.nova.runtime.utils.logging.NoOpRuntimeLogger
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
@@ -12,8 +11,22 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.UUID
 
 class DocumentSearchServiceTest {
+    @Test
+    fun explicitFileNameDoesNotReturnAnotherDocumentsAnswer() = runTest {
+        val localDao = FakeDocumentDao()
+        val requested = sampleDocument(name = "warranty.txt").copy(contentText = "The motor warranty lasts seven years.")
+        val other = sampleDocument(name = "other.txt").copy(contentText = "The warranty lasts one year for this unrelated item.")
+        localDao.insert(requested)
+        localDao.insert(other)
+        val search = DocumentSearchService(localDao, NoOpRuntimeLogger())
+        val result = search.search(SearchRequest("What is the warranty in warranty.txt?"), UUID.randomUUID())
+        assertEquals(listOf(requested.id), result.items.map { it.id })
+        assertTrue(search.search(SearchRequest("What is the warranty in missing.txt?"), UUID.randomUUID()).items.isEmpty())
+    }
+
     private lateinit var dao: FakeDocumentDao
     private lateinit var service: DocumentSearchService
 
@@ -31,10 +44,11 @@ class DocumentSearchServiceTest {
             dao.records[report.id] = report
             dao.records[budget.id] = budget
 
-            val page = service.search(
-                SearchRequest(query = "Quarterly", limit = 10, offset = 0),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    SearchRequest(query = "Quarterly", limit = 10, offset = 0),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(1, page.count)
             assertEquals(report.id, page.items.first().id)
@@ -44,10 +58,11 @@ class DocumentSearchServiceTest {
     @Test
     fun search_emptyResults_returnsZeroCount() =
         runTest {
-            val page = service.search(
-                SearchRequest(query = "missing", limit = 10, offset = 0),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    SearchRequest(query = "missing", limit = 10, offset = 0),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(0, page.count)
             assertEquals(0, page.totalCount)
@@ -56,22 +71,25 @@ class DocumentSearchServiceTest {
     @Test
     fun search_ranksContentMatchAboveFilenameOnly() =
         runTest {
-            val filenameOnly = sampleDocument(
-                name = "BooklyProspectusReport.pdf",
-                path = "/docs/bookly.pdf",
-            ).copy(contentText = "generic campus notes")
-            val contentMatch = sampleDocument(
-                name = "scan-042.pdf",
-                path = "/docs/scan.pdf",
-            ).copy(contentText = "BOOKLY PROSPECTUS REPORT placement outcomes")
+            val filenameOnly =
+                sampleDocument(
+                    name = "BooklyProspectusReport.pdf",
+                    path = "/docs/bookly.pdf",
+                ).copy(contentText = "generic campus notes")
+            val contentMatch =
+                sampleDocument(
+                    name = "scan-042.pdf",
+                    path = "/docs/scan.pdf",
+                ).copy(contentText = "BOOKLY PROSPECTUS REPORT placement outcomes")
 
             dao.records[filenameOnly.id] = filenameOnly
             dao.records[contentMatch.id] = contentMatch
 
-            val page = service.search(
-                SearchRequest(query = "bookly placement", limit = 10, offset = 0),
-                traceId = UUID.randomUUID(),
-            )
+            val page =
+                service.search(
+                    SearchRequest(query = "bookly placement", limit = 10, offset = 0),
+                    traceId = UUID.randomUUID(),
+                )
 
             assertEquals(2, page.count)
             assertEquals(contentMatch.id, page.items.first().id)
@@ -118,13 +136,18 @@ class DocumentSearchServiceTest {
 
         override fun observeById(id: UUID): Flow<DocumentEntity?> = emptyFlow()
 
-        override suspend fun getByPath(path: String): DocumentEntity? =
-            records.values.firstOrNull { it.path == path }
+        override suspend fun getExistingPaths(paths: List<String>): List<String> = paths.filter { getByPath(it) != null }
+
+        override suspend fun getByPath(path: String): DocumentEntity? = records.values.firstOrNull { it.path == path }
 
         override suspend fun searchByName(query: String): List<DocumentEntity> =
             records.values.filter { it.name.contains(query, ignoreCase = true) }
 
-        override suspend fun searchFullText(query: String, limit: Int, offset: Int): List<DocumentEntity> =
+        override suspend fun searchFullText(
+            query: String,
+            limit: Int,
+            offset: Int,
+        ): List<DocumentEntity> =
             records.values
                 .filter {
                     it.name.contains(query, ignoreCase = true) ||
@@ -146,19 +169,33 @@ class DocumentSearchServiceTest {
                     it.contentText.orEmpty().contains(query, ignoreCase = true)
             }
 
-        override suspend fun getByProjectId(projectId: UUID): List<DocumentEntity> =
-            records.values.filter { it.projectId == projectId }
+        override suspend fun getByProjectId(projectId: UUID): List<DocumentEntity> = records.values.filter { it.projectId == projectId }
 
-        override suspend fun listUnindexed(limit: Int): List<DocumentEntity> =
-            records.values.filter { it.embeddingId == null }.take(limit)
+        override suspend fun listUnindexed(limit: Int): List<DocumentEntity> = records.values.filter { it.embeddingId == null }.take(limit)
+
         override suspend fun listMissingContentText(limit: Int): List<DocumentEntity> =
             records.values.filter { it.contentText == null }.take(limit)
-        override suspend fun listMissingSummary(limit: Int): List<DocumentEntity> =
-            records.values.filter { it.summary == null }.take(limit)
+
+        override suspend fun listMissingSummary(limit: Int): List<DocumentEntity> = records.values.filter { it.summary == null }.take(limit)
+
+        override fun observeAll(): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
+            kotlinx.coroutines.flow.flowOf(
+                records.values.toList(),
+            )
+
+        override fun observeCount(): kotlinx.coroutines.flow.Flow<Int> = kotlinx.coroutines.flow.flowOf(records.size)
+
+        override fun observeIndexedCount(): kotlinx.coroutines.flow.Flow<Int> =
+            kotlinx.coroutines.flow.flowOf(
+                records.values.count {
+                    it.embeddingId != null
+                },
+            )
+
         override suspend fun countAll() = records.size
-        override suspend fun countWithSummary() =
-            records.values.count { !it.summary.isNullOrBlank() }
-        override suspend fun countMissingSummary() =
-            records.values.count { it.summary.isNullOrBlank() }
+
+        override suspend fun countWithSummary() = records.values.count { !it.summary.isNullOrBlank() }
+
+        override suspend fun countMissingSummary() = records.values.count { it.summary.isNullOrBlank() }
     }
 }

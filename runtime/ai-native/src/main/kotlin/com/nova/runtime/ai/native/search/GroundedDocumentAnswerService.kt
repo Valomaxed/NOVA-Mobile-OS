@@ -55,14 +55,12 @@ class GroundedDocumentAnswerService(
 
         if (shouldSkipLlmRewrite(query, snippet) || !localLlmEngine.isAvailable()) return extractive
 
-        val prompt = buildGroundedPrompt(
-            query = query,
-            snippet = snippet.take(MAX_CONTEXT_CHARS),
-            sourceFileName = sourceFileName,
-        )
-        val generated = localLlmEngine.generate(prompt)?.trim().orEmpty()
+        val selectedContext = com.nova.runtime.storage.search.DocumentPassageSelector
+            .select(snippet, query, MAX_CONTEXT_CHARS).orEmpty()
+        val generated = localLlmEngine.generateGrounded(selectedContext, { fittedContext ->
+            buildGroundedPrompt(query, fittedContext, sourceFileName)
+        })?.trim().orEmpty()
         if (generated.isBlank()) return extractive
-        if (looksUngrounded(generated, snippet)) return extractive
         if (looksLikeRefusal(generated)) {
             return DocumentDateIntelligence.unreadableContentMessage(
                 query = query,
@@ -72,6 +70,7 @@ class GroundedDocumentAnswerService(
                 today = referenceDate,
             )
         }
+        if (looksUngrounded(generated, snippet)) return extractive
 
         val attributed = DocumentDateIntelligence.formatAnswer(
             query = query,
@@ -107,7 +106,8 @@ class GroundedDocumentAnswerService(
         return """
             You are NOVA, an on-device assistant. Answer ONLY using the document context below.
             If the context does not contain the answer, reply exactly: NOT_IN_DOCUMENT
-            Do not invent times, courses, rooms, or menus. Prefer short factual bullets.
+            Do not invent facts, times, courses, rooms, or menus.
+            Use clear sentences and paragraphs. Preserve relevant steps and details from the source.
 
             Source file: $source
             User question: $query
@@ -128,6 +128,13 @@ class GroundedDocumentAnswerService(
     }
 
     private fun looksUngrounded(answer: String, snippet: String): Boolean {
+        val prose = answer.replace(Regex("""(?m)^\s*\d+[.)]\s+"""), "")
+        val facts = Regex("""\b(?:\d[\p{L}\p{N}_.:/-]*|[\p{L}]{1,8}-?\d[\p{L}\p{N}_-]*)\b""")
+        if (facts.findAll(prose).any { fact ->
+                !Regex("""(?<![\p{L}\p{N}])${Regex.escape(fact.value)}(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(snippet)
+            }
+        ) return true
         val answerTokens = tokenize(answer)
         if (answerTokens.isEmpty()) return true
         val snippetTokens = tokenize(snippet)
@@ -146,8 +153,8 @@ class GroundedDocumentAnswerService(
     companion object {
         const val ANSWER_MODE_QA = "qa"
         const val ANSWER_MODE_EXTRACT = "extract"
-        private const val MAX_CONTEXT_CHARS = 6_000
-        private const val MAX_ANSWER_CHARS = 1_200
+        private const val MAX_CONTEXT_CHARS = 12_000
+        private const val MAX_ANSWER_CHARS = 6_000
         private const val MIN_TOKEN_OVERLAP = 0.18
     }
 }

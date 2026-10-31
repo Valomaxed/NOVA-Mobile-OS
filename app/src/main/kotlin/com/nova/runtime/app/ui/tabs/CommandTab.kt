@@ -29,10 +29,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nova.runtime.app.ui.NovaOsViewModel
 import com.nova.runtime.app.ui.components.ContentDetailState
 import com.nova.runtime.app.ui.components.NovaButton
@@ -47,14 +47,14 @@ import com.nova.runtime.app.ui.components.NovaButtonVariant
 import com.nova.runtime.app.ui.components.NovaCard
 import com.nova.runtime.app.ui.components.NovaStatusChip
 import com.nova.runtime.app.ui.models.CommandLogEntry
-import com.nova.runtime.app.ui.theme.NovaAkzidenzRed
+import com.nova.runtime.app.ui.theme.NovaAccentBlue
 import com.nova.runtime.app.ui.theme.NovaPureBlack
 import com.nova.runtime.app.ui.theme.NovaSecondaryGrey
 import com.nova.runtime.app.ui.theme.NovaSurfaceDim
 import com.nova.runtime.app.ui.theme.NovaSurfaceLowest
 
 /**
- * Objective Modernist COMMAND Terminal Tab.
+ * Requests and results using the shared minimal theme.
  * Driven 100% by real CognitivePipelineOrchestrator and Command Log stream.
  */
 @Composable
@@ -64,10 +64,10 @@ fun CommandTab(
     onExpandContent: (ContentDetailState) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val commandLog by viewModel.commandHistory.collectAsState()
-    val isProcessing by viewModel.isProcessing.collectAsState()
-    val isRecordingVoice by viewModel.isRecordingVoice.collectAsState()
-    var promptInputText by remember { mutableStateOf("") }
+    val commandLog by viewModel.commandHistory.collectAsStateWithLifecycle()
+    val isProcessing by viewModel.isProcessing.collectAsStateWithLifecycle()
+    val isRecordingVoice by viewModel.isRecordingVoice.collectAsStateWithLifecycle()
+    var promptInputText by rememberSaveable { mutableStateOf("") }
 
     Column(
         modifier = modifier
@@ -78,7 +78,7 @@ fun CommandTab(
         // Header
         Column {
             Text(
-                text = "INFERENCE LOG & COMMANDS",
+                text = "Ask NOVA",
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = (-0.02).sp,
@@ -89,11 +89,11 @@ fun CommandTab(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(width = 2.dp, color = NovaAkzidenzRed, shape = RoundedCornerShape(0.dp))
+                    .background(NovaSurfaceLowest, RoundedCornerShape(16.dp))
                     .padding(8.dp),
             ) {
                 Text(
-                    text = "Real-time command stream and pipeline execution log.",
+                    text = "Use a command or your voice. Review the result below.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = NovaSecondaryGrey,
                 )
@@ -112,8 +112,9 @@ fun CommandTab(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "TERMINAL PROMPT",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        text = "Your request",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = NovaPureBlack,
                     )
                     NovaStatusChip(
@@ -126,14 +127,15 @@ fun CommandTab(
                     value = promptInputText,
                     onValueChange = { promptInputText = it },
                     modifier = Modifier.fillMaxWidth(),
+                    label = { Text("What would you like to do?") },
                     placeholder = {
                         Text(
-                            text = "Enter system command (e.g. 'Draft email to Rahul', 'Summarize meeting')...",
+                            text = "Ask a question or describe a task…",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     },
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = NovaAkzidenzRed,
+                        focusedBorderColor = NovaAccentBlue,
                         unfocusedBorderColor = NovaPureBlack,
                         focusedContainerColor = NovaSurfaceLowest,
                         unfocusedContainerColor = NovaSurfaceLowest,
@@ -141,7 +143,7 @@ fun CommandTab(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
                         onSend = {
-                            if (promptInputText.isNotBlank()) {
+                            if (promptInputText.isNotBlank() && !isProcessing && !isRecordingVoice) {
                                 viewModel.submitCommand(promptInputText)
                                 promptInputText = ""
                             }
@@ -155,13 +157,15 @@ fun CommandTab(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     NovaButton(
-                        text = if (isRecordingVoice) "RECORDING..." else "VOICE INPUT",
+                        text = if (isRecordingVoice) "Stop recording" else "Use voice",
                         onClick = onMicToggle,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isProcessing,
                         variant = if (isRecordingVoice) NovaButtonVariant.PRIMARY_RED else NovaButtonVariant.SECONDARY,
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Filled.Mic,
-                                contentDescription = "Voice",
+                                contentDescription = null,
                                 tint = if (isRecordingVoice) NovaSurfaceLowest else NovaPureBlack,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -169,9 +173,10 @@ fun CommandTab(
                     )
 
                     NovaButton(
-                        text = "RUN EXECUTION",
+                        text = "Send request",
+                        enabled = promptInputText.isNotBlank() && !isProcessing && !isRecordingVoice,
                         onClick = {
-                            if (promptInputText.isNotBlank()) {
+                            if (promptInputText.isNotBlank() && !isProcessing && !isRecordingVoice) {
                                 viewModel.submitCommand(promptInputText)
                                 promptInputText = ""
                             }
@@ -181,7 +186,7 @@ fun CommandTab(
                         trailingIcon = {
                             Icon(
                                 imageVector = Icons.Filled.Send,
-                                contentDescription = "Send",
+                                contentDescription = null,
                                 tint = NovaSurfaceLowest,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -193,8 +198,8 @@ fun CommandTab(
 
         // Execution History Stream Header
         Text(
-            text = "COMMAND LOG STREAM",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+            text = "Command history",
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             color = NovaPureBlack,
         )
 
@@ -242,8 +247,8 @@ private fun CommandLogItemCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = "#${entry.indexLabel}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                        color = NovaAkzidenzRed,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = NovaAccentBlue,
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -270,14 +275,14 @@ private fun CommandLogItemCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(width = 1.dp, color = NovaPureBlack, shape = RoundedCornerShape(0.dp))
-                    .background(NovaSurfaceDim, RoundedCornerShape(0.dp))
+                    .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant, shape = RoundedCornerShape(16.dp))
+                    .background(NovaSurfaceDim, RoundedCornerShape(16.dp))
                     .padding(10.dp),
             ) {
                 Column {
                     Text(
-                        text = "INPUT >",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                        text = "Your request",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium, fontSize = 12.sp),
                         color = NovaSecondaryGrey,
                     )
                     Spacer(modifier = Modifier.height(2.dp))
@@ -293,15 +298,15 @@ private fun CommandLogItemCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(width = 1.dp, color = NovaAkzidenzRed, shape = RoundedCornerShape(0.dp))
-                    .background(NovaSurfaceLowest, RoundedCornerShape(0.dp))
+                    .border(width = 1.dp, color = NovaAccentBlue, shape = RoundedCornerShape(16.dp))
+                    .background(NovaSurfaceLowest, RoundedCornerShape(16.dp))
                     .padding(10.dp),
             ) {
                 Column {
                     Text(
-                        text = "RESPONSE >",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
-                        color = NovaAkzidenzRed,
+                        text = "NOVA’s answer",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium, fontSize = 12.sp),
+                        color = NovaAccentBlue,
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
@@ -322,7 +327,7 @@ private fun CommandLogItemCard(
                     entry.tags.forEach { tag ->
                         Box(
                             modifier = Modifier
-                                .border(1.dp, NovaPureBlack, RoundedCornerShape(0.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
@@ -335,10 +340,10 @@ private fun CommandLogItemCard(
                 }
 
                 Text(
-                    text = "DETAILS â†’",
+                    text = "View details",
                     style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        color = NovaAkzidenzRed,
+                        fontWeight = FontWeight.SemiBold,
+                        color = NovaAccentBlue,
                     ),
                     modifier = Modifier.clickable {
                         onExpandContent(

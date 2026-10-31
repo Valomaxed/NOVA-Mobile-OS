@@ -5,6 +5,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.nova.runtime.storage.converters.UuidConverter
 import com.nova.runtime.storage.dao.ContactDao
+import com.nova.runtime.storage.dao.DocumentLibraryDao
 import com.nova.runtime.storage.dao.DocumentDao
 import com.nova.runtime.storage.dao.EmbeddingDao
 import com.nova.runtime.storage.dao.ExecutionHistoryDao
@@ -42,6 +43,8 @@ import com.nova.runtime.storage.migrations.StorageMigrations
 )
 @TypeConverters(UuidConverter::class)
 abstract class NovaDatabase : RoomDatabase() {
+    abstract fun documentLibraryDao(): DocumentLibraryDao
+
     abstract fun documentDao(): DocumentDao
 
     abstract fun photoDao(): PhotoDao

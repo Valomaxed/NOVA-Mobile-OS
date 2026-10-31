@@ -31,6 +31,9 @@ interface DocumentDao {
     @Query("SELECT * FROM documents WHERE path = :path LIMIT 1")
     suspend fun getByPath(path: String): DocumentEntity?
 
+    @Query("SELECT path FROM documents WHERE path IN (:paths)")
+    suspend fun getExistingPaths(paths: List<String>): List<String>
+
     @Query("SELECT * FROM documents WHERE name LIKE '%' || :query || '%' ORDER BY modifiedAt DESC")
     suspend fun searchByName(query: String): List<DocumentEntity>
 
@@ -46,7 +49,11 @@ interface DocumentDao {
         LIMIT :limit OFFSET :offset
         """,
     )
-    suspend fun searchFullText(query: String, limit: Int, offset: Int): List<DocumentEntity>
+    suspend fun searchFullText(
+        query: String,
+        limit: Int,
+        offset: Int,
+    ): List<DocumentEntity>
 
     @Query(
         """
@@ -122,6 +129,15 @@ interface DocumentDao {
 
     @Query("SELECT * FROM documents ORDER BY modifiedAt DESC")
     fun observeAll(): Flow<List<DocumentEntity>>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM documents
+        INNER JOIN embeddings ON documents.embeddingId = embeddings.embeddingId
+        WHERE embeddings.vectorBlob IS NOT NULL
+        """,
+    )
+    fun observeIndexedCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM documents")
     fun observeCount(): Flow<Int>

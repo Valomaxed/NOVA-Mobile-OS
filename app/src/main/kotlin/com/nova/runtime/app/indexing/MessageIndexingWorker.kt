@@ -24,6 +24,7 @@ class MessageIndexingWorker(
 
     override suspend fun doWork(): Result =
         runCatching {
+            if (!(applicationContext.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager).isCharging) return@runCatching Result.success()
             val indexed = messageEmbeddingIndexer.indexBatch()
             if (indexed > 0) {
                 MessageIndexingScheduler.enqueueFollowUp(applicationContext)
@@ -39,7 +40,9 @@ object MessageIndexingScheduler {
     fun start(applicationContext: Context) {
         val constraints =
             Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                .setRequiresCharging(true)
+            .setRequiresBatteryNotLow(true)
+            .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
                 .build()
         val request =
             OneTimeWorkRequestBuilder<MessageIndexingWorker>()
@@ -57,13 +60,17 @@ object MessageIndexingScheduler {
                 .build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             PERIODIC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             periodic,
         )
     }
 
     fun enqueueFollowUp(applicationContext: Context) {
-        val request = OneTimeWorkRequestBuilder<MessageIndexingWorker>().build()
-        WorkManager.getInstance(applicationContext).enqueue(request)
+        val request = OneTimeWorkRequestBuilder<MessageIndexingWorker>()
+            .setConstraints(Constraints.Builder().setRequiresCharging(true).setRequiresBatteryNotLow(true).build())
+            .build()
+        WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+            WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request,
+        )
     }
 }

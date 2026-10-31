@@ -3,63 +3,51 @@ package com.nova.runtime.app.ui.tabs
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Subject
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nova.runtime.app.ui.NovaOsViewModel
 import com.nova.runtime.app.ui.components.ContentDetailState
 import com.nova.runtime.app.ui.components.NovaButton
 import com.nova.runtime.app.ui.components.NovaButtonVariant
 import com.nova.runtime.app.ui.components.NovaCard
-import com.nova.runtime.app.ui.components.NovaStatusChip
 import com.nova.runtime.app.ui.models.LiveTelemetryState
-import com.nova.runtime.app.ui.models.VectorPoint2D
-import com.nova.runtime.app.ui.theme.NovaAkzidenzRed
+import com.nova.runtime.app.ui.theme.NovaAccentBlue
 import com.nova.runtime.app.ui.theme.NovaPureBlack
 import com.nova.runtime.app.ui.theme.NovaSecondaryGrey
-import com.nova.runtime.app.ui.theme.NovaSurfaceDim
-import com.nova.runtime.app.ui.theme.NovaSurfaceLowest
-import com.nova.runtime.storage.entities.DocumentEntity
+import com.nova.runtime.storage.dao.DocumentLibraryEntry
+import java.util.UUID
 
-/**
- * Objective Modernist INDEX (RAG Documents) Tab.
- * Driven 100% by real Room DB document records & vector embeddings.
- */
+/** A lazily composed library with metadata-only rows and on-demand document bodies. */
 @Composable
 fun DocumentsTab(
     viewModel: NovaOsViewModel,
@@ -69,477 +57,220 @@ fun DocumentsTab(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val totalDocuments by viewModel.totalDocumentsCount.collectAsState()
-    val totalEmbeddings by viewModel.totalEmbeddingsCount.collectAsState()
-    val indexedDocs by viewModel.indexedDocumentsList.collectAsState()
-    val latencyMs by viewModel.retrievalLatencyMs.collectAsState()
-    val vectorPoints by viewModel.vectorSpacePoints.collectAsState()
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri: Uri? ->
-        uri?.let { viewModel.ingestDocumentFromUri(context, it) }
+    val totalDocuments by viewModel.totalDocumentsCount.collectAsStateWithLifecycle()
+    val documents by viewModel.indexedDocumentsList.collectAsStateWithLifecycle()
+    val dailyDocuments by viewModel.dailyDocuments.collectAsStateWithLifecycle()
+    var importDaily by rememberSaveable { mutableStateOf(false) }
+    var askFile by rememberSaveable { mutableStateOf<String?>(null) }
+    var dailyQuestion by rememberSaveable { mutableStateOf("") }
+    val processing by viewModel.isProcessing.collectAsStateWithLifecycle()
+    val importing by viewModel.isImportingDocument.collectAsStateWithLifecycle()
+    val message by viewModel.documentLibraryMessage.collectAsStateWithLifecycle()
+    var removeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var removeName by rememberSaveable { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        uri?.let { viewModel.ingestDocumentFromUri(context, it, dailyEssential = importDaily) }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // Header & Summary Block
-        Column {
-            Text(
-                text = "RAG INDEX",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.02).sp,
-                ),
-                color = NovaPureBlack,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(width = 2.dp, color = NovaAkzidenzRed, shape = RoundedCornerShape(0.dp))
-                    .padding(8.dp),
-            ) {
+        item(key = "header", contentType = "header") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Documents", style = MaterialTheme.typography.headlineLarge, color = NovaPureBlack)
                 Text(
-                    text = "Vector space visualization and active document pipeline monitoring. System optimal.",
+                    "Import a file to make its contents available to local search.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = NovaSecondaryGrey,
                 )
             }
         }
-
-        // Stats Block: Embeddings & Latency
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            NovaCard(
-                modifier = Modifier.weight(1f),
-                backgroundColor = NovaSurfaceLowest,
-            ) {
-                Column {
-                    Text(
-                        text = "TOTAL EMBEDDINGS",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.05.sp,
-                        ),
-                        color = NovaSecondaryGrey,
+        item(key = "daily-heading", contentType = "daily-heading") {
+            NovaCard(modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Daily essentials", style = MaterialTheme.typography.titleLarge)
+                    Text("Keep your timetable, menu, routines, and other frequently used documents here. Ask about a specific file to keep the answer focused on that source.", style = MaterialTheme.typography.bodyMedium)
+                    NovaButton(
+                        text = "Add daily document",
+                        onClick = { importDaily = true; picker.launch(arrayOf("*/*")) },
+                        enabled = !importing,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        val formattedEmbeddings = if (totalEmbeddings > 0) {
-                            "%.1f".format(totalEmbeddings / 1000f)
-                        } else {
-                            "4.2"
-                        }
-                        Text(
-                            text = formattedEmbeddings,
-                            style = MaterialTheme.typography.displayLarge.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 48.sp,
-                                lineHeight = 48.sp,
-                            ),
-                            color = NovaPureBlack,
-                        )
-                        Text(
-                            text = "M",
-                            style = MaterialTheme.typography.displayLarge.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 48.sp,
-                                lineHeight = 48.sp,
-                            ),
-                            color = NovaAkzidenzRed,
-                        )
-                    }
-                }
-            }
-
-            NovaCard(
-                modifier = Modifier.weight(1f),
-                backgroundColor = NovaSurfaceLowest,
-            ) {
-                Column {
-                    Text(
-                        text = "RETRIEVAL LATENCY",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.05.sp,
-                        ),
-                        color = NovaSecondaryGrey,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = "$latencyMs",
-                            style = MaterialTheme.typography.displayLarge.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 48.sp,
-                                lineHeight = 48.sp,
-                            ),
-                            color = NovaPureBlack,
-                        )
-                        Text(
-                            text = "ms",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 24.sp,
-                            ),
-                            color = NovaAkzidenzRed,
-                        )
-                    }
+                    if (dailyDocuments.isEmpty()) Text("No daily documents saved yet.", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
-
-        // Action Button: Ingest Data
-        NovaButton(
-            text = "INGEST DATA",
-            onClick = { filePickerLauncher.launch("*/*") },
-            variant = NovaButtonVariant.PRIMARY,
-            modifier = Modifier.fillMaxWidth(),
-            trailingIcon = {
-                Icon(
-                    imageVector = Icons.Filled.ArrowForward,
-                    contentDescription = "Ingest",
-                    tint = NovaSurfaceLowest,
-                    modifier = Modifier.size(20.dp),
+        items(dailyDocuments, key = { "daily-${it.id}" }, contentType = { "daily-document" }) { document ->
+            NovaCard(modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(document.name, style = MaterialTheme.typography.titleMedium)
+                    Text(if (document.contentExtractStatus == "SUCCESS") "Ready to ask" else "Open the file to check extracted text before asking.", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { viewModel.openLibraryDocument(document.id, onExpandContent) }) { Text("Review extracted text") }
+                    NovaButton(text = "Ask about this file", onClick = { askFile = document.name; dailyQuestion = "" }, enabled = !processing && document.contentExtractStatus == "SUCCESS")
+                    TextButton(onClick = { viewModel.setDailyDocument(document.id, false) }) { Text("Remove from daily essentials") }
+                }
+            }
+        }
+        item(key = "metrics", contentType = "metrics") {
+            NovaCard(modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("$totalDocuments documents", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "${telemetryState.totalDocumentsIndexed} searchable · ${telemetryState.indexedVectorCount} stored vectors",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NovaSecondaryGrey,
+                    )
+                    Text(
+                        telemetryState.ragLatencyMs?.let { "Last vector search: %.2f ms".format(it) }
+                            ?: "Search latency has not been measured yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NovaSecondaryGrey,
+                    )
+                }
+            }
+        }
+        item(key = "import", contentType = "import") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                NovaButton(
+                    text = if (importing) "Importing…" else "Import document",
+                    onClick = { importDaily = false; picker.launch(arrayOf("*/*")) },
+                    enabled = !importing,
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                (message ?: indexingStatus)?.let {
+                    Text(
+                        it,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NovaSecondaryGrey,
+                    )
+                }
+            }
+        }
+        if (documents.isEmpty()) {
+            item(key = "empty", contentType = "empty") {
+                NovaCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (totalDocuments == 0) "No documents yet" else "Loading documents…",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            "Imported files appear here. Tap a document to read its extracted text.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NovaSecondaryGrey,
+                        )
+                    }
+                }
+            }
+        } else {
+            item(key = "list-heading", contentType = "heading") {
+                Text("Recent documents", style = MaterialTheme.typography.titleMedium)
+            }
+            items(documents, key = { it.id.toString() }, contentType = { "document" }) { document ->
+                if (dailyDocuments.none { it.id == document.id }) {
+                    TextButton(onClick = { viewModel.setDailyDocument(document.id, true) }) { Text("Save ${document.name} to daily essentials") }
+                }
+                DocumentLibraryRow(
+                    document = document,
+                    canRemove = !importing,
+                    onOpen = { viewModel.openLibraryDocument(document.id, onExpandContent) },
+                    onRemove = {
+                        removeId = document.id.toString()
+                        removeName = document.name
+                    },
+                )
+            }
+        }
+        item(key = "footer", contentType = "footer") {
+            Column(modifier = Modifier.padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Showing ${documents.size} of $totalDocuments",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NovaSecondaryGrey,
+                )
+                if (documents.size < totalDocuments) {
+                    NovaButton(
+                        text = "Load more documents",
+                        onClick = viewModel::loadMoreDocuments,
+                        modifier = Modifier.fillMaxWidth(),
+                        variant = NovaButtonVariant.OUTLINE,
+                    )
+                }
+            }
+        }
+    }
+
+    askFile?.let { name ->
+        AlertDialog(
+            onDismissRequest = { askFile = null },
+            title = { Text("Ask about $name") },
+            text = {
+                OutlinedTextField(value = dailyQuestion, onValueChange = { dailyQuestion = it }, label = { Text("Your question") })
             },
+            confirmButton = {
+                TextButton(enabled = dailyQuestion.isNotBlank() && !processing, onClick = {
+                    val quote = 34.toChar()
+                    viewModel.submitCommand(dailyQuestion.trim() + " in " + quote + name.replace(quote.toString(), "") + quote)
+                    viewModel.selectTab(com.nova.runtime.app.ui.components.NovaScreenTab.COMMAND)
+                    askFile = null
+                }) { Text("Ask NOVA") }
+            },
+            dismissButton = { TextButton(onClick = { askFile = null }) { Text("Cancel") } },
         )
-
-        // Vector Space Map Visualization
-        VectorSpaceMapCard(vectorPoints = vectorPoints)
-
-        // Indexed Documents Table
-        IndexedDocumentsTableCard(
-            documents = indexedDocs,
-            onExpandContent = onExpandContent,
-            onDeleteDocument = viewModel::deleteDocument,
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
     }
-}
-
-@Composable
-private fun VectorSpaceMapCard(vectorPoints: List<VectorPoint2D>) {
-    NovaCard(
-        modifier = Modifier.fillMaxWidth(),
-        backgroundColor = NovaSurfaceLowest,
-    ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "VECTOR SPACE MAP",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = NovaPureBlack,
-                )
-                NovaStatusChip(status = "LIVE", isPrimary = true)
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Vector Grid Canvas
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp)
-                    .border(2.dp, NovaPureBlack, RoundedCornerShape(0.dp))
-                    .background(NovaSurfaceLowest, RoundedCornerShape(0.dp)),
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val step = 40.dp.toPx()
-                    var x = 0f
-                    while (x < size.width) {
-                        drawLine(
-                            color = Color(0xFFE2E2E2),
-                            start = Offset(x, 0f),
-                            end = Offset(x, size.height),
-                            strokeWidth = 1.dp.toPx(),
-                        )
-                        x += step
-                    }
-                    var y = 0f
-                    while (y < size.height) {
-                        drawLine(
-                            color = Color(0xFFE2E2E2),
-                            start = Offset(0f, y),
-                            end = Offset(size.width, y),
-                            strokeWidth = 1.dp.toPx(),
-                        )
-                        y += step
-                    }
-
-                    // Axes
-                    drawLine(
-                        color = NovaPureBlack,
-                        start = Offset(0f, size.height),
-                        end = Offset(size.width, size.height),
-                        strokeWidth = 2.dp.toPx(),
-                    )
-                    drawLine(
-                        color = NovaPureBlack,
-                        start = Offset(0f, 0f),
-                        end = Offset(0f, size.height),
-                        strokeWidth = 2.dp.toPx(),
-                    )
-                }
-
-                // Scatter Points
-                vectorPoints.forEach { pt ->
-                    Box(
-                        modifier = Modifier
-                            .offset(
-                                x = (pt.x * 280).dp,
-                                y = (pt.y * 150).dp,
-                            )
-                            .size(if (pt.isPrimary) 12.dp else 8.dp)
-                            .background(
-                                if (pt.isPrimary) NovaAkzidenzRed else NovaPureBlack,
-                                RoundedCornerShape(0.dp),
-                            ),
-                    )
-
-                    if (pt.label != null) {
-                        Box(
-                            modifier = Modifier
-                                .offset(x = (pt.x * 280 - 10).dp, y = (pt.y * 150 + 14).dp)
-                                .border(1.dp, NovaPureBlack, RoundedCornerShape(0.dp))
-                                .background(NovaSurfaceLowest, RoundedCornerShape(0.dp))
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                text = pt.label,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                color = NovaPureBlack,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun IndexedDocumentsTableCard(
-    documents: List<DocumentEntity>,
-    onExpandContent: (ContentDetailState) -> Unit,
-    onDeleteDocument: (DocumentEntity) -> Unit,
-) {
-    NovaCard(
-        modifier = Modifier.fillMaxWidth(),
-        backgroundColor = NovaSurfaceLowest,
-    ) {
-        Column {
-            Text(
-                text = "INDEXED DOCUMENTS",
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
-                ),
-                color = NovaPureBlack,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Table Header Row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(NovaSurfaceDim)
-                    .border(width = 1.dp, color = NovaPureBlack, shape = RoundedCornerShape(0.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "FILE NAME",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = NovaPureBlack,
-                    modifier = Modifier.weight(2f),
-                )
-                Text(
-                    text = "STATUS",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = NovaPureBlack,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = "VECTORS",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = NovaPureBlack,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            // Table Rows
-            if (documents.isEmpty()) {
-                // Default fallback rows matching design if Room DB empty
-                SampleDocumentRow(
-                    name = "user_manual_v2.pdf",
-                    status = "INDEXED",
-                    vectorCount = "12,045",
-                    onExpandContent = onExpandContent,
-                )
-                SampleDocumentRow(
-                    name = "notes_meeting.txt",
-                    status = "INDEXED",
-                    vectorCount = "842",
-                    onExpandContent = onExpandContent,
-                )
-                SampleDocumentRow(
-                    name = "q3_financials.csv",
-                    status = "PROCESSING",
-                    vectorCount = "--",
-                    onExpandContent = onExpandContent,
-                )
-            } else {
-                documents.forEach { doc ->
-                    DocumentRowItem(
-                        document = doc,
-                        onExpandContent = onExpandContent,
-                        onDeleteDocument = onDeleteDocument,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SampleDocumentRow(
-    name: String,
-    status: String,
-    vectorCount: String,
-    onExpandContent: (ContentDetailState) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(width = 1.dp, color = NovaPureBlack, shape = RoundedCornerShape(0.dp))
-            .clickable {
-                onExpandContent(
-                    ContentDetailState(
-                        fileName = name,
-                        text = "Document Details:\n• File: $name\n• Status: $status\n• Vectors: $vectorCount\n• Source: Local Room Vector Store",
-                    )
-                )
-            }
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(2f),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Description,
-                contentDescription = "Doc",
-                tint = NovaSecondaryGrey,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = NovaPureBlack,
-            )
-        }
-
-        Box(modifier = Modifier.weight(1f)) {
-            NovaStatusChip(
-                status = status,
-                isPrimary = status == "INDEXED",
-                isSecondary = status != "INDEXED",
-            )
-        }
-
-        Text(
-            text = vectorCount,
-            style = MaterialTheme.typography.bodyMedium,
-            color = NovaSecondaryGrey,
-            modifier = Modifier.weight(1f),
+    removeId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { removeId = null },
+            title = { Text("Remove document?") },
+            text = { Text("Remove $removeName from NOVA's library? The original file will stay on your device.") },
+            confirmButton = {
+                TextButton(enabled = !importing, onClick = {
+                    viewModel.removeLibraryDocument(UUID.fromString(id))
+                    removeId = null
+                }) { Text("Remove", color = NovaAccentBlue) }
+            },
+            dismissButton = { TextButton(onClick = { removeId = null }) { Text("Cancel") } },
         )
     }
 }
 
 @Composable
-private fun DocumentRowItem(
-    document: DocumentEntity,
-    onExpandContent: (ContentDetailState) -> Unit,
-    onDeleteDocument: (DocumentEntity) -> Unit,
+private fun DocumentLibraryRow(
+    document: DocumentLibraryEntry,
+    canRemove: Boolean,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(width = 1.dp, color = NovaPureBlack, shape = RoundedCornerShape(0.dp))
-            .clickable {
-                onExpandContent(
-                    ContentDetailState(
-                        fileName = document.name,
-                        text = "Document Record:\n• ID: ${document.id}\n• Path: ${document.path}\n• Status: ${document.contentExtractStatus}\n• Size: ${document.size} bytes\n\nContent Preview:\n${document.contentText ?: document.summary ?: "No content text"}",
-                    )
+    Column {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.weight(1f).clickable(onClick = onOpen).padding(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    document.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val status = when {
+                    document.hasVector -> "Searchable"
+                    document.contentExtractStatus == "FAILED" -> "Text extraction failed"
+                    document.contentExtractStatus == "EMPTY" -> "No text found"
+                    else -> "Search indexing pending"
+                }
+                Text(
+                    "$status · ${document.size} bytes",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NovaSecondaryGrey,
                 )
             }
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(2f),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Subject,
-                contentDescription = "Doc",
-                tint = NovaAkzidenzRed,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = document.name,
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = NovaPureBlack,
-            )
+            IconButton(onClick = onRemove, enabled = canRemove) {
+                Icon(Icons.Filled.Delete, contentDescription = "Remove ${document.name} from library", tint = NovaAccentBlue)
+            }
         }
-
-        Box(modifier = Modifier.weight(1f)) {
-            NovaStatusChip(
-                status = document.contentExtractStatus ?: "INDEXED",
-                isPrimary = document.contentExtractStatus == "INDEXED",
-            )
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
-            modifier = Modifier.weight(1f),
-        ) {
-            Text(
-                text = "${(document.size / 40).coerceAtLeast(12)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = NovaSecondaryGrey,
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = "Delete",
-                tint = NovaAkzidenzRed,
-                modifier = Modifier
-                    .size(18.dp)
-                    .clickable { onDeleteDocument(document) },
-            )
-        }
+        HorizontalDivider()
     }
 }
